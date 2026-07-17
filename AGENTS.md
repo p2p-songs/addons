@@ -11,3 +11,7 @@ report back. Don't infer the process from `CLAUDE.md` alone. This repo
 
 For this repo's scope and specific invariants, see `CLAUDE.md` in this same
 directory — applies regardless of which agent/tool is reading it.
+
+If you are the **implementer**, before starting work read the newest-first
+audit registry at `../.github/docs/audits/README.md` and its latest report.
+It is authoritative for sign-off even if you saw no GitHub issue.

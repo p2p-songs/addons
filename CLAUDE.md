@@ -15,6 +15,11 @@ The first-party reference addons, in build order (Plan §10, Phase 3):
 
 Full architecture: [`p2p-songs/.github` — `docs/IMPLEMENTATION_PLAN.md`](https://github.com/p2p-songs/.github/blob/main/docs/IMPLEMENTATION_PLAN.md).
 
+## Before implementation
+Read `../.github/docs/audits/README.md` and its first (latest) report before
+starting work. The registry owns current sign-off and supersession; do not rely
+only on issue notifications.
+
 ## Invariants this repo must hold (see `.github`'s `docs/REVIEW_CHECKLIST.md` §2-§6 — read that file in full before implementing or reviewing `stream-debrid`)
 Summary (checklist has the complete, cross-referenced version):
 - `stream-debrid`: one addon, no plugin interface for aggregating other
