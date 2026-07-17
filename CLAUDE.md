@@ -33,3 +33,8 @@ Scaffolding only (this file + README). No addon code yet. Build in the
 order listed above — `stream-legal` first (proves the pipeline end-to-end
 with zero legal/config complexity), `stream-debrid` last (highest
 complexity and scrutiny).
+
+## Being audited?
+If you're the adversarial reviewer, not the implementer: start at
+[`p2p-songs/.github` — `docs/ADVERSARIAL_REVIEW_CONTRACT.md`](https://github.com/p2p-songs/.github/blob/main/docs/ADVERSARIAL_REVIEW_CONTRACT.md),
+not this file.
