@@ -39,11 +39,31 @@ Summary (checklist has the complete, cross-referenced version):
 - All addons: conform to the protocol/ID scheme from `addon-sdk`'s
   `defineStreamHandler` etc. — don't invent ad hoc response shapes.
 
+## Workspace layout
+This repo is a **pnpm workspace** (`packages/*`). Each addon is a package.
+Cross-repo dependency on the SDK: pre-publish, packages consume
+`@p2p-songs/addon-sdk` via a **`link:` dependency to the sibling checkout**
+(`link:../../../addon-sdk/packages/sdk`) — this assumes the documented sibling
+layout under `p2p-songs/` and that the SDK is built (`dist/`). Swap to a
+versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
+(via the SDK), vitest.
+
 ## Status
-Scaffolding only (this file + README). No addon code yet. Build in the
-order listed above — `stream-legal` first (proves the pipeline end-to-end
-with zero legal/config complexity), `stream-debrid` last (highest
-complexity and scrutiny).
+**`stream-legal` implemented (2026-07-19, Plan Phase 3 #1)** — the first
+reference addon and first end-to-end slice. A zero-config stream addon:
+`mbid:recording:<uuid>` → MusicBrainz metadata lookup → search a **fixed source
+allowlist** (Internet Archive always; Jamendo when `JAMENDO_CLIENT_ID` is set) →
+score/rank candidates (drops weak matches + any non-https url) → protocol stream
+objects. Discovery/metadata/sources are injected behind interfaces so the
+resolver is unit-tested without network; a fake-`fetch` test exercises the real
+Internet Archive two-step (advancedsearch → metadata → download URL). 16 tests
+(match, resolve, IA adapter, handler-via-SDK-router); typecheck + build green.
+**Not yet audited.** Next reference addons: `musicmeta` / `catalog-charts`
+(so a recording id can actually be discovered), then `stream-debrid` (last,
+highest scrutiny).
+
+Remaining scaffolding-only: `musicmeta`, `catalog-charts`, `stream-ytmusic`,
+`lyrics-lrclib`, `stream-debrid`.
 
 ## Being audited?
 If you're the adversarial reviewer, not the implementer: start at

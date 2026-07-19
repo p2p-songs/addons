@@ -1,0 +1,32 @@
+{
+  "name": "@p2p-songs/stream-legal",
+  "version": "0.1.0",
+  "description": "A zero-config p2p-songs stream addon that resolves recordings to direct URLs from a fixed set of Creative-Commons / public-domain catalogs (Internet Archive, optional Jamendo).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "stream-legal": "./dist/serve.js"
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/serve.js"
+  },
+  "dependencies": {
+    "@p2p-songs/addon-sdk": "link:../../../addon-sdk/packages/sdk"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
