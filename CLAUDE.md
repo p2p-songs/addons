@@ -49,21 +49,26 @@ versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
 (via the SDK), vitest.
 
 ## Status
-**`stream-legal` implemented (2026-07-19, Plan Phase 3 #1)** — the first
-reference addon and first end-to-end slice. A zero-config stream addon:
-`mbid:recording:<uuid>` → MusicBrainz metadata lookup → search a **fixed source
-allowlist** (Internet Archive always; Jamendo when `JAMENDO_CLIENT_ID` is set) →
-score/rank candidates (drops weak matches + any non-https url) → protocol stream
-objects. Discovery/metadata/sources are injected behind interfaces so the
-resolver is unit-tested without network; a fake-`fetch` test exercises the real
-Internet Archive two-step (advancedsearch → metadata → download URL). 16 tests
-(match, resolve, IA adapter, handler-via-SDK-router); typecheck + build green.
-**Not yet audited.** Next reference addons: `musicmeta` / `catalog-charts`
-(so a recording id can actually be discovered), then `stream-debrid` (last,
-highest scrutiny).
+**`stream-legal` + `musicmeta` implemented (2026-07-19, Plan Phase 3).** The
+addon side of the discovery→stream loop is complete and verified end-to-end
+(musicmeta album meta → `recordingId` → stream-legal → playable https url).
 
-Remaining scaffolding-only: `musicmeta`, `catalog-charts`, `stream-ytmusic`,
-`lyrics-lrclib`, `stream-debrid`.
+- **`stream-legal`** (#3) — zero-config stream addon: `mbid:recording:<uuid>` →
+  MusicBrainz metadata lookup → **fixed source allowlist** (Internet Archive
+  always; Jamendo when `JAMENDO_CLIENT_ID` set) → score/rank (drops weak matches
+  + any non-https url) → protocol streams. 16 tests.
+- **`musicmeta`** (#1, the music Cinemeta) — zero-config catalog+meta addon:
+  MusicBrainz search → `metaPreview[]` with entity-typed ids per content type;
+  MusicBrainz lookup → `metaDetail`, where album meta carries `tracks[]` with
+  **both** `recordingId` (streamable) and `trackId` (album context: disc +
+  free-text position). Cover Art Archive posters. 17 tests.
+
+Both inject their network client behind an interface (unit-tested without
+network) + a fake-`fetch` adapter test for the real API parsing; both compose
+with and inherit the SDK router boundary. **Neither is audited yet.**
+
+Remaining scaffolding-only: `catalog-charts`, `stream-ytmusic`, `lyrics-lrclib`,
+`stream-debrid` (last, highest scrutiny).
 
 ## Being audited?
 If you're the adversarial reviewer, not the implementer: start at
