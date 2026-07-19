@@ -9,9 +9,15 @@ The first-party reference addons, in build order (Plan §10, Phase 3):
 4. `stream-ytmusic` — `ytId`-style, official YouTube embed
 5. `lyrics-lrclib` — lyrics via lrclib.net
 6. `stream-debrid` — **the highest-scrutiny addon in this repo.** One
-   self-contained addon (discovery + aggregation + debrid resolution),
-   modeled on Torrentio, not AIOStreams. Read Plan §2 and §3 in full before
-   touching this addon's code.
+   self-contained addon (discovery + aggregation + **file selection** + debrid
+   resolution), modeled on Torrentio, not AIOStreams. Read Plan §2/§2a and §3
+   in full before touching this addon's code. Note the music-specific step:
+   requests are keyed by `mbid:recording:<uuid>` (the song) but music torrents
+   are **whole albums** — so it must pick the *right track file* inside a
+   multi-file album torrent (by disc+track position when the request's
+   album-context `mbid:track:`/`mbid:release:` is present, else fuzzy
+   title+duration). "Largest file" (Torrentio's movie heuristic) does NOT work
+   for music. See Plan §2a.
 
 Full architecture: [`p2p-songs/.github` — `docs/IMPLEMENTATION_PLAN.md`](https://github.com/p2p-songs/.github/blob/main/docs/IMPLEMENTATION_PLAN.md).
 
