@@ -3,6 +3,7 @@ import { normalize, scoreCandidate, rankCandidates } from "../src/match.js";
 import type { Candidate, TrackQuery } from "../src/sources/types.js";
 
 const q: TrackQuery = { artist: "Kevin MacLeod", title: "Cipher", durationMs: 120000 };
+const CC = "https://creativecommons.org/licenses/by/3.0/";
 const cand = (over: Partial<Candidate>): Candidate => ({
   source: "internet-archive",
   title: "Cipher",
@@ -10,6 +11,7 @@ const cand = (over: Partial<Candidate>): Candidate => ({
   url: "https://archive.org/download/x/cipher.mp3",
   format: "MP3",
   durationMs: 120000,
+  license: CC,
   ...over,
 });
 
@@ -56,5 +58,30 @@ describe("rankCandidates", () => {
       cand({ url: "https://ok/x.mp3" }),
     ]);
     expect(ranked.map((c) => c.url)).toEqual(["https://ok/x.mp3"]);
+  });
+
+  it("drops candidates without a recognized open license (A-006)", () => {
+    const ranked = rankCandidates(q, [
+      cand({ url: "https://no-license/x.mp3", license: undefined }),
+      cand({ url: "https://all-rights/x.mp3", license: "All Rights Reserved" }),
+      cand({ url: "https://cc/x.mp3", license: "https://creativecommons.org/licenses/by-sa/4.0/" }),
+      cand({ url: "https://pd/x.mp3", license: "Public Domain" }),
+    ]);
+    expect(ranked.map((c) => c.url).sort()).toEqual(["https://cc/x.mp3", "https://pd/x.mp3"]);
+  });
+
+  it("drops an exact-title match from the wrong artist (A-006)", () => {
+    const query = { artist: "Correct Artist", title: "Home", durationMs: 200000 };
+    const ranked = rankCandidates(query, [
+      cand({ artist: "Wrong Artist", title: "Home", durationMs: 200000, url: "https://x/wrong.mp3" }),
+      cand({ artist: "Correct Artist", title: "Home", durationMs: 200000, url: "https://x/right.mp3" }),
+    ]);
+    expect(ranked.map((c) => c.url)).toEqual(["https://x/right.mp3"]);
+  });
+
+  it("still matches when artist is unknown on one side (can't gate)", () => {
+    const query = { artist: "", title: "Home", durationMs: 200000 };
+    const ranked = rankCandidates(query, [cand({ artist: "Someone", title: "Home", durationMs: 200000, url: "https://x/a.mp3" })]);
+    expect(ranked).toHaveLength(1);
   });
 });

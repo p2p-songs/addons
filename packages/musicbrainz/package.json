@@ -1,0 +1,25 @@
+{
+  "name": "@p2p-songs/musicbrainz",
+  "version": "0.1.0",
+  "description": "Shared MusicBrainz client for p2p-songs addons, with a built-in rate limiter (MusicBrainz requires ≤1 request/second per IP) and 503 Retry-After backoff.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

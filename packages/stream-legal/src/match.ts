@@ -5,6 +5,7 @@
  * matches, so `stream-legal` doesn't serve an unrelated track. Pure and tested.
  */
 import type { Candidate, TrackQuery } from "./sources/types.js";
+import { isRecognizedOpenLicense } from "./license.js";
 
 /** Lowercase, strip diacritics/punctuation, drop "feat." tails, collapse whitespace. */
 export function normalize(s: string): string {
@@ -62,15 +63,33 @@ export function scoreCandidate(query: TrackQuery, c: Candidate): number {
 export const MATCH_THRESHOLD = 0.5;
 
 /**
- * Rank candidates: keep only https URLs scoring at/above threshold, sort best
- * first, and dedupe by URL. Non-https candidates are dropped defensively so a
- * misbehaving source can't poison the whole response (the SDK would otherwise
- * reject the entire array).
+ * Minimum artist agreement required when both the query and candidate name an
+ * artist. Without this, an exact title (0.6) + matching duration (0.1) clears
+ * the threshold even with zero artist overlap — so a common title like "Home"
+ * would resolve to a *different artist's* song (audit A-006). Duration is
+ * corroboration only, never a substitute for artist agreement.
+ */
+export const MIN_ARTIST_SCORE = 0.4;
+
+/** Does the candidate agree on artist well enough (when artist info exists on both sides)? */
+function artistGate(query: TrackQuery, c: Candidate): boolean {
+  if (!normalize(query.artist) || !normalize(c.artist)) return true; // unknown on either side → can't gate
+  return stringScore(query.artist, c.artist) >= MIN_ARTIST_SCORE;
+}
+
+/**
+ * Rank candidates. A candidate survives only if it: is an https URL; carries a
+ * recognized open (CC / public-domain) license; agrees on artist (when known);
+ * and scores at/above threshold. Then sort best-first and dedupe by URL.
+ * Non-https and unlicensed candidates are dropped defensively so a misbehaving
+ * source can't poison the response or overstate rights.
  */
 export function rankCandidates(query: TrackQuery, candidates: Candidate[]): Candidate[] {
   const seen = new Set<string>();
   return candidates
     .filter((c) => /^https:\/\//i.test(c.url))
+    .filter((c) => isRecognizedOpenLicense(c.license))
+    .filter((c) => artistGate(query, c))
     .map((c) => ({ c, score: scoreCandidate(query, c) }))
     .filter(({ score }) => score >= MATCH_THRESHOLD)
     .sort((a, b) => b.score - a.score)

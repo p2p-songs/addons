@@ -6,6 +6,7 @@
  * Jamendo API `audio` field (its own CDN).
  */
 import type { Candidate, LegalSource, TrackQuery } from "./types.js";
+import { isRecognizedOpenLicense } from "../license.js";
 
 const API_URL = "https://api.jamendo.com/v3.0/tracks";
 
@@ -35,15 +36,17 @@ export class JamendoSource implements LegalSource {
     const out: Candidate[] = [];
     for (const t of body.results ?? []) {
       if (!t.audio) continue;
+      // Fail closed: require a recognized CC license URL from the item (audit A-006).
+      if (!isRecognizedOpenLicense(t.license_ccurl)) continue;
       const candidate: Candidate = {
         source: this.id,
         title: t.name?.trim() ?? "",
         artist: t.artist_name?.trim() ?? "",
         url: t.audio,
         format: "MP3",
+        license: t.license_ccurl!,
       };
       if (typeof t.duration === "number" && t.duration > 0) candidate.durationMs = t.duration * 1000;
-      if (t.license_ccurl) candidate.license = t.license_ccurl;
       out.push(candidate);
     }
     return out;

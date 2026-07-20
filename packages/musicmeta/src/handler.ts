@@ -3,7 +3,7 @@ import { AddonBuilder, type AddonInterface } from "@p2p-songs/addon-sdk";
 import { manifest } from "./manifest.js";
 import { searchCatalog } from "./catalog.js";
 import { metaFor } from "./meta.js";
-import type { MusicBrainzClient } from "./musicbrainz.js";
+import type { MusicBrainzClient } from "@p2p-songs/musicbrainz";
 
 export interface MusicMetaDeps {
   mb: MusicBrainzClient;

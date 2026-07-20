@@ -11,7 +11,9 @@ export { searchCatalog } from "./catalog.js";
 export type { CatalogDeps } from "./catalog.js";
 export { metaFor } from "./meta.js";
 export type { MetaDeps } from "./meta.js";
-export { MusicBrainzApi } from "./musicbrainz.js";
+export { releaseFrontCover } from "./coverart.js";
+// The MusicBrainz client now lives in the shared @p2p-songs/musicbrainz package.
+export { MusicBrainzApi } from "@p2p-songs/musicbrainz";
 export type {
   MusicBrainzClient,
   MbArtist,
@@ -19,5 +21,4 @@ export type {
   MbRecording,
   MbTrack,
   MbReleaseDetail,
-} from "./musicbrainz.js";
-export { releaseFrontCover } from "./coverart.js";
+} from "@p2p-songs/musicbrainz";

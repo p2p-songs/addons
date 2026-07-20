@@ -13,7 +13,7 @@ import {
   type ReleaseId,
   type RecordingId,
 } from "@p2p-songs/addon-sdk";
-import type { MusicBrainzClient } from "./musicbrainz.js";
+import type { MusicBrainzClient } from "@p2p-songs/musicbrainz";
 import { releaseFrontCover } from "./coverart.js";
 
 export interface CatalogDeps {

@@ -16,8 +16,10 @@ const candidate: Candidate = {
   url: "https://archive.org/download/x/cipher.mp3",
   format: "MP3",
   durationMs: 120000,
+  license: "https://creativecommons.org/licenses/by/3.0/",
 };
 const source: LegalSource = { id: "internet-archive", name: "IA", search: async () => [candidate] };
+const deadSource: LegalSource = { id: "dead", name: "dead", search: async () => { throw new Error("outage"); } };
 
 describe("stream-legal manifest", () => {
   it("is a valid addon manifest", () => {
@@ -42,10 +44,19 @@ describe("stream-legal over the SDK router", () => {
     expect(r.status).toBe(404);
   });
 
-  it("returns an empty stream list (not an error) when nothing matches", async () => {
+  it("genuine no-match → empty 200 with only a SHORT cache (A-006)", async () => {
     const empty = createStreamLegalAddon({ metadata: { lookup: async () => undefined }, sources: [source] });
     const r = await createRouter(empty)({ method: "GET", url: `/stream/track/${enc(REC)}.json` });
     expect(r.status).toBe(200);
     expect(JSON.parse(r.body).streams).toEqual([]);
+    expect(r.headers["Cache-Control"]).toContain("max-age=300");
+  });
+
+  it("total source outage → uncacheable error, NOT a cached empty 200 (A-006)", async () => {
+    const down = createStreamLegalAddon({ metadata: meta, sources: [deadSource] });
+    const r = await createRouter(down)({ method: "GET", url: `/stream/track/${enc(REC)}.json` });
+    expect(r.status).toBe(500);
+    // 500 is not heuristically cacheable, so a transient outage can't poison caches.
+    expect(r.headers["Cache-Control"]).toBeUndefined();
   });
 });

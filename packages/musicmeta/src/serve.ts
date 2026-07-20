@@ -7,8 +7,8 @@
  * your own contact per their API policy before running against the live service.
  */
 import { serveHTTP } from "@p2p-songs/addon-sdk";
+import { MusicBrainzApi } from "@p2p-songs/musicbrainz";
 import { createMusicMetaAddon } from "./handler.js";
-import { MusicBrainzApi } from "./musicbrainz.js";
 
 const userAgent =
   process.env.MUSICMETA_USER_AGENT ??

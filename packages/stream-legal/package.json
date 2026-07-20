@@ -22,7 +22,8 @@
     "start": "node dist/serve.js"
   },
   "dependencies": {
-    "@p2p-songs/addon-sdk": "link:../../../addon-sdk/packages/sdk"
+    "@p2p-songs/addon-sdk": "link:../../../addon-sdk/packages/sdk",
+    "@p2p-songs/musicbrainz": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",

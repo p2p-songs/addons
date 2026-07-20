@@ -40,6 +40,18 @@ describe("InternetArchiveSource", () => {
     expect(candidates.every((c) => c.url.startsWith("https://archive.org/download/"))).toBe(true);
   });
 
+  it("emits nothing for an item with no recognized open license (A-006 fail-closed)", async () => {
+    const fetchImpl = fakeFetch({
+      "advancedsearch.php": { response: { docs: [{ identifier: "unlicensed", title: "Song", creator: "Someone" }] } },
+      "metadata/unlicensed": {
+        metadata: { creator: "Someone" }, // no licenseurl
+        files: [{ name: "song.mp3", format: "VBR MP3", length: "120" }],
+      },
+    });
+    const candidates = await new InternetArchiveSource(fetchImpl).search({ artist: "Someone", title: "Song" });
+    expect(candidates).toEqual([]);
+  });
+
   it("throws on a failed search (resolver isolates it)", async () => {
     const fetchImpl = (async () => new Response("err", { status: 500 })) as typeof fetch;
     await expect(new InternetArchiveSource(fetchImpl).search({ artist: "a", title: "b" })).rejects.toThrow();

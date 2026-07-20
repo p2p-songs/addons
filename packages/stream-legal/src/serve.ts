@@ -5,6 +5,7 @@
  *   PORT=7001 JAMENDO_CLIENT_ID=… node dist/serve.js
  */
 import { serveHTTP } from "@p2p-songs/addon-sdk";
+import { MusicBrainzApi } from "@p2p-songs/musicbrainz";
 import { createStreamLegalAddon } from "./handler.js";
 import { MusicBrainzLookup } from "./metadata.js";
 import { buildSources } from "./sources/index.js";
@@ -14,7 +15,7 @@ const userAgent =
   "p2p-songs-stream-legal/0.1.0 (https://github.com/p2p-songs/addons)";
 
 const addon = createStreamLegalAddon({
-  metadata: new MusicBrainzLookup(userAgent),
+  metadata: new MusicBrainzLookup(new MusicBrainzApi(userAgent)),
   sources: buildSources({ jamendoClientId: process.env.JAMENDO_CLIENT_ID }),
 });
 

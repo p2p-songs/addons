@@ -15,7 +15,7 @@ import {
   type RecordingId,
   type TrackId,
 } from "@p2p-songs/addon-sdk";
-import type { MusicBrainzClient, MbTrack } from "./musicbrainz.js";
+import type { MusicBrainzClient, MbTrack } from "@p2p-songs/musicbrainz";
 import { releaseFrontCover } from "./coverart.js";
 
 export interface MetaDeps {

@@ -1,9 +1,14 @@
 /**
- * MusicBrainz client, behind an interface so the catalog/meta handlers are
- * testable without network. Returns plain domain shapes (already artist-credit
- * flattened, durations in ms); the handlers turn these into protocol entities
- * with entity-typed ids.
+ * Shared MusicBrainz client. Returns flattened domain shapes (artist-credit
+ * joined, durations in ms) so addon handlers can turn them into protocol
+ * entities. Every request goes through a {@link RateLimiter} (default 1/sec) and
+ * honors `503 Retry-After` — the operational contract the live API requires.
+ *
+ * Co-host both addons in one process and pass a **shared** limiter to enforce
+ * the per-IP budget across them; separate processes each get their own budget
+ * (use an external gateway or a MusicBrainz mirror for real multi-process scale).
  */
+import { RateLimiter, type Sleep } from "./rate-limit.js";
 
 export interface MbArtist {
   id: string;
@@ -46,21 +51,53 @@ export interface MusicBrainzClient {
   getRecording(uuid: string, signal?: AbortSignal): Promise<MbRecording | undefined>;
 }
 
+export interface MusicBrainzApiOptions {
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+  /** Shared limiter — pass the same instance to co-hosted addons. Defaults to 1/sec. */
+  limiter?: RateLimiter;
+  /** Max 503 retries (default 2). */
+  maxRetries?: number;
+  sleep?: Sleep;
+}
+
+const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class MusicBrainzApi implements MusicBrainzClient {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  private readonly limiter: RateLimiter;
+  private readonly maxRetries: number;
+  private readonly sleep: Sleep;
+
   constructor(
     private readonly userAgent: string,
-    private readonly baseUrl = "https://musicbrainz.org/ws/2",
-    private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    options: MusicBrainzApiOptions = {},
+  ) {
+    this.baseUrl = options.baseUrl ?? "https://musicbrainz.org/ws/2";
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.limiter = options.limiter ?? new RateLimiter(1000, options.sleep);
+    this.maxRetries = options.maxRetries ?? 2;
+    this.sleep = options.sleep ?? realSleep;
+  }
 
   private async get<T>(path: string, signal?: AbortSignal): Promise<T | undefined> {
-    const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      headers: { "User-Agent": this.userAgent, Accept: "application/json" },
-      ...(signal ? { signal } : {}),
-    });
-    if (res.status === 404) return undefined;
-    if (!res.ok) throw new Error(`MusicBrainz ${path} failed: ${res.status}`);
-    return (await res.json()) as T;
+    const url = `${this.baseUrl}${path}`;
+    for (let attempt = 0; ; attempt++) {
+      const res = await this.limiter.run(() =>
+        this.fetchImpl(url, {
+          headers: { "User-Agent": this.userAgent, Accept: "application/json" },
+          ...(signal ? { signal } : {}),
+        }),
+      );
+      if (res.status === 503 && attempt < this.maxRetries) {
+        await this.sleep(retryAfterMs(res));
+        continue;
+      }
+      if (res.status === 404) return undefined;
+      if (!res.ok) throw new Error(`MusicBrainz ${path} failed: ${res.status}`);
+      return (await res.json()) as T;
+    }
   }
 
   async searchArtists(query: string, limit: number, signal?: AbortSignal): Promise<MbArtist[]> {
@@ -122,6 +159,13 @@ export class MusicBrainzApi implements MusicBrainzClient {
     const r = await this.get<RawRecording>(`/recording/${uuid}?fmt=json&inc=artist-credits`, signal);
     return r ? toRecording(r) : undefined;
   }
+}
+
+/** Parse `Retry-After` (seconds); default to 1s. */
+function retryAfterMs(res: Response): number {
+  const header = res.headers.get("Retry-After");
+  const secs = header ? Number(header) : NaN;
+  return Number.isFinite(secs) && secs >= 0 ? secs * 1000 : 1000;
 }
 
 // --- raw MusicBrainz JSON → domain shapes ---

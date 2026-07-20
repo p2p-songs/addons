@@ -15,11 +15,26 @@ importers:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@20.19.43)
 
+  packages/musicbrainz:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.17.0
+        version: 20.19.43
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@20.19.43)
+
   packages/musicmeta:
     dependencies:
       '@p2p-songs/addon-sdk':
         specifier: link:../../../addon-sdk/packages/sdk
         version: link:../../../addon-sdk/packages/sdk
+      '@p2p-songs/musicbrainz':
+        specifier: workspace:*
+        version: link:../musicbrainz
     devDependencies:
       '@types/node':
         specifier: ^20.17.0
@@ -36,6 +51,9 @@ importers:
       '@p2p-songs/addon-sdk':
         specifier: link:../../../addon-sdk/packages/sdk
         version: link:../../../addon-sdk/packages/sdk
+      '@p2p-songs/musicbrainz':
+        specifier: workspace:*
+        version: link:../musicbrainz
     devDependencies:
       '@types/node':
         specifier: ^20.17.0

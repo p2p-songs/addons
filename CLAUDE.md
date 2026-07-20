@@ -48,6 +48,14 @@ layout under `p2p-songs/` and that the SDK is built (`dist/`). Swap to a
 versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
 (via the SDK), vitest.
 
+- **`packages/musicbrainz`** (`@p2p-songs/musicbrainz`) — a **shared,
+  rate-limited MusicBrainz client** consumed by `musicmeta` and `stream-legal`
+  (in-workspace `workspace:*` dep). MusicBrainz requires **≤1 req/sec per IP**,
+  so every MB call goes through its `RateLimiter` (+ `503 Retry-After` backoff).
+  Co-host addons in one process and share a limiter instance to hold the budget
+  across them; separate processes each hold their own (external gateway / MB
+  mirror for real multi-process scale). Audit A-006. Don't add a second MB client.
+
 ## Status
 **`stream-legal` + `musicmeta` implemented (2026-07-19, Plan Phase 3).** The
 addon side of the discovery→stream loop is complete and verified end-to-end
@@ -55,17 +63,24 @@ addon side of the discovery→stream loop is complete and verified end-to-end
 
 - **`stream-legal`** (#3) — zero-config stream addon: `mbid:recording:<uuid>` →
   MusicBrainz metadata lookup → **fixed source allowlist** (Internet Archive
-  always; Jamendo when `JAMENDO_CLIENT_ID` set) → score/rank (drops weak matches
-  + any non-https url) → protocol streams. 16 tests.
+  always; Jamendo when `JAMENDO_CLIENT_ID` set) → score/rank → protocol streams.
+  **A-006 invariants (don't regress):** emits a candidate only with a recognized
+  **per-item CC/public-domain license** (fail closed — Archive hosting is not
+  evidence; see `license.ts`); drops any non-https url; **requires artist
+  agreement** before matching (`MIN_ARTIST_SCORE`, so a common title can't
+  resolve to the wrong artist); a **total source outage** throws (uncacheable
+  500) while a genuine no-match caches briefly (`max-age=300`). 25 tests.
 - **`musicmeta`** (#1, the music Cinemeta) — zero-config catalog+meta addon:
   MusicBrainz search → `metaPreview[]` with entity-typed ids per content type;
   MusicBrainz lookup → `metaDetail`, where album meta carries `tracks[]` with
   **both** `recordingId` (streamable) and `trackId` (album context: disc +
-  free-text position). Cover Art Archive posters. 17 tests.
+  free-text position). Cover Art Archive posters. 14 tests.
 
-Both inject their network client behind an interface (unit-tested without
-network) + a fake-`fetch` adapter test for the real API parsing; both compose
-with and inherit the SDK router boundary. **Neither is audited yet.**
+Both consume the shared rate-limited `@p2p-songs/musicbrainz` client; sources
+are injected behind interfaces (unit-tested without network) + fake-`fetch`
+adapter tests; both compose with and inherit the SDK router boundary. **A-006
+(1 critical + 5 medium across SDK + these addons) reconciled 2026-07-20; not yet
+re-audited.**
 
 Remaining scaffolding-only: `catalog-charts`, `stream-ytmusic`, `lyrics-lrclib`,
 `stream-debrid` (last, highest scrutiny).

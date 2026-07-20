@@ -8,6 +8,7 @@
  * proxy (Review Checklist §5).
  */
 import type { Candidate, LegalSource, TrackQuery } from "./types.js";
+import { isRecognizedOpenLicense } from "../license.js";
 
 const SEARCH_URL = "https://archive.org/advancedsearch.php";
 const METADATA_URL = "https://archive.org/metadata";
@@ -53,7 +54,12 @@ export class InternetArchiveSource implements LegalSource {
     if (!res.ok) return [];
     const meta = (await res.json()) as IaMetadata;
     const artist = firstString(doc.creator) ?? firstString(meta.metadata?.creator) ?? "";
-    const license = meta.metadata?.licenseurl;
+    const license = doc.licenseurl ?? meta.metadata?.licenseurl;
+
+    // Fail closed per item: emit nothing unless the item carries a recognized
+    // open (CC / public-domain) license. Archive hosting alone is not evidence
+    // of open rights (audit A-006).
+    if (!isRecognizedOpenLicense(license)) return [];
 
     const out: Candidate[] = [];
     for (const f of meta.files ?? []) {
@@ -65,10 +71,10 @@ export class InternetArchiveSource implements LegalSource {
         artist,
         url: `${DOWNLOAD_URL}/${encodeURIComponent(doc.identifier)}/${encodeURIComponent(f.name)}`,
         format,
+        license: license!,
       };
       const durationMs = parseLengthMs(f.length);
       if (durationMs !== undefined) candidate.durationMs = durationMs;
-      if (license) candidate.license = license;
       out.push(candidate);
     }
     return out;

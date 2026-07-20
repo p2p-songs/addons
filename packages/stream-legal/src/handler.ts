@@ -10,8 +10,13 @@ import { resolveStreams, type ResolveDeps } from "./resolve.js";
 export function createStreamLegalAddon(deps: ResolveDeps): AddonInterface {
   return new AddonBuilder(manifest)
     .defineStreamHandler(async ({ recordingId }) => {
-      const streams = await resolveStreams(recordingId, deps);
-      // These catalogs are stable — cache generously; nothing here expires.
+      const { streams, allSourcesFailed } = await resolveStreams(recordingId, deps);
+      // Total upstream outage → throw (SDK returns an uncacheable 500), so a
+      // transient outage never poisons caches with a 6-hour "no streams".
+      if (allSourcesFailed) throw new Error("all stream sources failed");
+      // Genuine no-match → cache briefly (catalogs may gain the track later).
+      if (streams.length === 0) return { streams: [], cacheMaxAge: 300 };
+      // Real results from these stable catalogs → cache generously.
       return { streams, cacheMaxAge: 6 * 3600, staleRevalidate: 24 * 3600 };
     })
     .getInterface();

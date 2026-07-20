@@ -4,7 +4,7 @@ import type {
   MbRelease,
   MbRecording,
   MbReleaseDetail,
-} from "../src/musicbrainz.js";
+} from "@p2p-songs/musicbrainz";
 
 /** A configurable in-memory MusicBrainz client for tests. */
 export class FakeMusicBrainz implements MusicBrainzClient {

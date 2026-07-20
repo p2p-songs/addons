@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { metaDetailSchema } from "@p2p-songs/addon-sdk";
 import { metaFor } from "../src/meta.js";
 import { FakeMusicBrainz, UUID } from "./fakes.js";
-import type { MbReleaseDetail } from "../src/musicbrainz.js";
+import type { MbReleaseDetail } from "@p2p-songs/musicbrainz";
 
 const releaseDetail: MbReleaseDetail = {
   id: UUID.release,
