@@ -29,7 +29,12 @@ function escapeHtml(s: string): string {
  * material into the HTML: a page that echoes secrets back is a page that leaks
  * them into browser caches, screenshots, and shoulder-surfing.
  */
-export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest: Manifest }): string {
+export function renderBitbopConfigurePage(ctx: {
+  config?: AddonConfig;
+  manifest: Manifest;
+  /** Mirrors the server's indexer address policy so the page can warn accurately (A-011). */
+  allowPrivateIndexers?: boolean;
+}): string {
   const nonce = randomBytes(16).toString("base64");
   const name = escapeHtml(ctx.manifest.name);
   const prior = readPrior(ctx.config);
@@ -80,27 +85,25 @@ export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest:
 <h2>Debrid account</h2>
 <label for="provider">Provider</label>
 <select id="provider">
-  <option value="realdebrid"${prior.provider === "realdebrid" ? " selected" : ""}>Real-Debrid</option>
-  <option value="alldebrid"${prior.provider === "alldebrid" ? " selected" : ""}>AllDebrid</option>
+  <option value="realdebrid" selected>Real-Debrid</option>
 </select>
+<p class="hint">Only providers Bitbop can actually resolve through are listed — more appear here as their adapters land.</p>
 <label for="apiKey">API key</label>
 <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="your debrid API key" />
 <p class="hint">Found in your provider's account settings. Bitbop calls the provider as you — never as a shared account.</p>
 
 <h2>Indexers</h2>
-<p class="hint">Torznab endpoints from your own Jackett or Prowlarr instance. Bitbop ships no tracker list.</p>
+<p class="hint">Torznab endpoints from your own Jackett or Prowlarr instance. Bitbop ships no tracker list. Use <strong>https</strong> — this instance ${
+    ctx.allowPrivateIndexers
+      ? "is in self-host mode, so a private or loopback indexer address is allowed."
+      : "only queries public addresses, so a <code>localhost</code> or LAN indexer will be refused."
+  }</p>
 <div id="indexers"></div>
 <button id="addIndexer" type="button">+ Add indexer</button>
 
 <h2>Options</h2>
+<p class="hint">Bitbop only returns torrents your debrid account has <strong>already cached</strong>, so a track starts instantly. Anything uncached would mean waiting on a download, which a player can't do mid-queue.</p>
 <div class="row">
-  <div>
-    <label for="cachedOnly">Results</label>
-    <select id="cachedOnly">
-      <option value="true"${prior.cachedOnly !== false ? " selected" : ""}>Only what's already cached (recommended)</option>
-      <option value="false"${prior.cachedOnly === false ? " selected" : ""}>Include uncached (may not play)</option>
-    </select>
-  </div>
   <div>
     <label for="maxResults">Max streams</label>
     <input id="maxResults" type="number" min="1" max="20" value="${prior.maxResults}" />
@@ -128,6 +131,11 @@ export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest:
 <script nonce="${nonce}">
 (function () {
   var priorIndexers = ${JSON.stringify(prior.indexerNames)};
+  var ALLOW_PRIVATE = ${ctx.allowPrivateIndexers ? "true" : "false"};
+  // A client-side pre-check mirroring the server's address policy. The server
+  // is authoritative (it validates the resolved IP); this just gives an honest
+  // error at configure time instead of a dead install URL.
+  var IS_PRIVATE_HOST = /^(localhost$|127\\.|0\\.|10\\.|169\\.254\\.|192\\.168\\.|172\\.(1[6-9]|2\\d|3[01])\\.|\\[?::1\\]?$|\\[?f[cd])/i;
 
   function indexerRow(name) {
     var fs = document.createElement("fieldset");
@@ -176,6 +184,19 @@ export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest:
       var nm = rows[i].querySelector(".ix-name").value.trim();
       if (!url && !key) continue;
       if (!url || !key) return fail("Each indexer needs both a URL and an API key.");
+      // Catch a destination this instance will refuse *here*, rather than
+      // letting it become an opaque playback failure later (audit A-011).
+      var parsed;
+      try { parsed = new URL(url); } catch (e) { return fail("Indexer URL isn't a valid URL: " + url); }
+      if (!ALLOW_PRIVATE && parsed.protocol !== "https:") {
+        return fail("This Bitbop instance only queries https indexers.");
+      }
+      if (!ALLOW_PRIVATE && IS_PRIVATE_HOST.test(parsed.hostname)) {
+        return fail(
+          "This Bitbop instance only queries public addresses, so " + parsed.hostname +
+          " will be refused. Point it at a reachable indexer, or run Bitbop in self-host mode."
+        );
+      }
       var entry = { url: url, apiKey: key };
       if (nm) entry.name = nm;
       indexers.push(entry);
@@ -185,7 +206,6 @@ export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest:
     var cfg = {
       debrid: { provider: document.getElementById("provider").value, apiKey: apiKey },
       indexers: indexers,
-      cachedOnly: document.getElementById("cachedOnly").value === "true",
       maxResults: Number(document.getElementById("maxResults").value) || 8
     };
 
@@ -209,17 +229,9 @@ export function renderBitbopConfigurePage(ctx: { config?: AddonConfig; manifest:
 
 /** Prefill shape only — never key material. */
 function readPrior(config: AddonConfig | undefined): {
-  provider: string;
-  cachedOnly: boolean | undefined;
   maxResults: number;
   indexerNames: string[];
 } {
-  const debrid = config?.["debrid"];
-  const provider =
-    typeof debrid === "object" && debrid !== null && typeof (debrid as { provider?: unknown }).provider === "string"
-      ? (debrid as { provider: string }).provider
-      : "realdebrid";
-
   const rawIndexers = config?.["indexers"];
   const indexerNames = Array.isArray(rawIndexers)
     ? rawIndexers.map((i) => {
@@ -236,8 +248,7 @@ function readPrior(config: AddonConfig | undefined): {
       })
     : [];
 
-  const cachedOnly = typeof config?.["cachedOnly"] === "boolean" ? (config["cachedOnly"] as boolean) : undefined;
   const maxResults = typeof config?.["maxResults"] === "number" ? (config["maxResults"] as number) : 8;
 
-  return { provider, cachedOnly, maxResults, indexerNames };
+  return { maxResults, indexerNames };
 }

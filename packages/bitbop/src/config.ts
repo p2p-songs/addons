@@ -27,7 +27,14 @@ import { z } from "zod";
  * {@link import("./debrid/types.js").DebridProvider} port — the rest of the
  * pipeline is provider-agnostic.
  */
-export const debridProviderIdSchema = z.enum(["realdebrid", "alldebrid"]);
+/**
+ * Only providers with a working adapter appear here. AllDebrid was listed
+ * before its adapter existed, which let a user generate a valid-looking install
+ * URL that could never produce a stream (audit A-011) — a config must not be
+ * able to name a mode the addon cannot serve. Add the id back together with its
+ * {@link import("./debrid/types.js").DebridProvider} implementation.
+ */
+export const debridProviderIdSchema = z.enum(["realdebrid"]);
 export type DebridProviderId = z.infer<typeof debridProviderIdSchema>;
 
 /**
@@ -52,12 +59,13 @@ export const bitbopConfigSchema = z.object({
   /** The user's own Torznab indexers. At least one, or discovery has nothing to query. */
   indexers: z.array(indexerConfigSchema).min(1),
   /**
-   * Only return streams the debrid provider reports as **already cached**.
-   * Default true: an uncached torrent would mean asking the provider to start a
-   * download and polling for it, which is not a thing a player can wait on
-   * mid-queue. See `resolve.ts`.
+   * **Cached-only is not a setting — it's the contract.** Resolving an uncached
+   * torrent means asking the provider to start a download and polling for it,
+   * which a player cannot wait on mid-queue. An "include uncached" option
+   * therefore existed but could never yield a stream (the resolver rejects any
+   * torrent whose status isn't `downloaded`), so it was removed rather than
+   * left as a switch that silently does nothing (audit A-011).
    */
-  cachedOnly: z.boolean().default(true),
   /** Preferred audio formats, best first. Used for ranking only, never as a filter. */
   preferFormats: z.array(z.string()).default(["FLAC", "MP3"]),
   /** Cap on returned streams. */
@@ -90,7 +98,6 @@ export function redactConfig(config: BitbopConfig): Record<string, unknown> {
   return {
     debrid: { provider: config.debrid.provider, apiKey: "[redacted]" },
     indexers: config.indexers.map((i) => ({ name: i.name ?? hostOf(i.url), url: "[redacted]", apiKey: "[redacted]" })),
-    cachedOnly: config.cachedOnly,
     preferFormats: config.preferFormats,
     maxResults: config.maxResults,
   };

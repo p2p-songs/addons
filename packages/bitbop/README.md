@@ -31,6 +31,8 @@ URL — never a magnet, never an `infoHash`.
   the Torznab endpoints come from your config. (Torrentio ships its own list; we
   deliberately don't — "built-in discovery" and "a hardcoded illicit source" are
   distinguishable only by who chose the source.)
+- **…and because that URL is caller-supplied, its destination is policed.**
+  See [Indexer address policy](#indexer-address-policy).
 - **Never stores audio.** Bitbop holds only candidate *metadata* (title, hash,
   size). The bytes flow debrid CDN → player; they never pass through Bitbop.
 
@@ -62,19 +64,49 @@ There are no credential environment variables — that's by design. A deployer
 runs the service (publicly, like Torrentio, is fine); each user brings their own
 account.
 
+## Indexer address policy
+
+Bitbop fetches an indexer URL that *the caller* supplies. On a publicly reachable
+instance that is SSRF unless the destination is policed, so it is (audit A-011):
+
+- **https only**, and only **publicly-routable** destinations.
+- **Every redirect hop is re-checked** — a permitted public URL that redirects to
+  `http://127.0.0.1` doesn't get a free pass.
+- **The address validated is the address connected to**, so DNS rebinding has no
+  window. Literal IPs (including `::ffff:127.0.0.1`) are checked too — Node skips
+  DNS for numeric hosts, which is exactly how such a guard usually leaks.
+
+**Self-hosting?** Your Jackett/Prowlarr is probably on `http://localhost:9117`,
+which the above refuses. Opt in explicitly:
+
+```bash
+BITBOP_ALLOW_PRIVATE_INDEXERS=1 PORT=7003 node dist/serve.js
+```
+
+Only ever set that on an instance **you alone can reach** — it is precisely the
+policy that makes a public instance safe. The active mode is logged at startup
+and shown on the `/configure` page, which pre-checks your URL against it.
+
 ## Supported providers
 
 | Provider | Status |
 |---|---|
 | Real-Debrid | implemented (`src/debrid/realdebrid.ts`) |
-| AllDebrid | in the config enum; adapter not yet written |
 
-Adding one is a {@link DebridProvider} implementation plus a registry entry —
-the rest of the pipeline is provider-agnostic.
+Only providers with a working adapter appear in the config schema at all, so a
+config can never name a mode Bitbop can't serve — AllDebrid was briefly
+selectable without an adapter, which let you build a valid-looking install URL
+that could never produce a stream (audit A-011). Adding a provider is a
+`DebridProvider` implementation, a registry entry, and the id in the schema.
+
+**Bitbop only returns already-cached torrents.** That isn't a setting — resolving
+an uncached torrent means waiting on a debrid-side download, which a player can't
+do mid-queue.
 
 ## Tests
 
-`pnpm test` — 66 tests, no network or debrid account required (indexers, the
+`pnpm test` — 122 tests, no network or debrid account required (indexers, the
 debrid provider, and metadata are all injected behind interfaces and driven with
 fakes). The correctness-critical file-selection logic is the most heavily
-covered.
+covered, followed by the address policy (every deny range asserted individually,
+plus a loopback listener that proves the guard never opens the connection).

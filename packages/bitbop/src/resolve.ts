@@ -61,9 +61,16 @@ export async function resolveStreams(
 
   const streams: Stream[] = [];
   let authFailed = false;
+  // Distinguish "the provider told us something" from "the provider is broken".
+  // A torrent that is simply uncached or has no matching file is a *legitimate*
+  // negative answer; a transport/5xx/rate-limit failure is not. If every probe
+  // ends in the latter, this is an outage, not a no-match (audit A-011).
+  let probed = 0;
+  let providerFailures = 0;
   for (const candidate of probe) {
     if (signal?.aborted) break;
     if (streams.length >= config.maxResults) break;
+    probed++;
     try {
       const stream = await resolveCandidate(candidate, track, config, deps.provider, signal);
       if (stream) streams.push(stream);
@@ -72,11 +79,16 @@ export async function resolveStreams(
         authFailed = true;
         break; // a bad key fails every candidate — stop, and report it as an outage
       }
+      providerFailures++;
       // A single torrent failing (removed, transient) must not sink the response.
     }
   }
 
-  if (streams.length === 0 && authFailed) return { streams: [], outage: true };
+  if (streams.length === 0) {
+    if (authFailed) return { streams: [], outage: true };
+    // Every candidate we tried failed for a provider-side reason → retryable.
+    if (probed > 0 && providerFailures === probed) return { streams: [], outage: true };
+  }
   return { streams: rankStreams(streams, config), outage: false };
 }
 
@@ -119,7 +131,9 @@ async function resolveCandidate(
   signal?: AbortSignal,
 ): Promise<Stream | undefined> {
   const cache = await provider.checkCache(candidate.infoHash, config.debrid.apiKey, signal);
-  if (config.cachedOnly && !cache.cached) return undefined; // don't offer a stream that won't play now
+  // Cached-only is unconditional: an uncached torrent cannot be resolved now,
+  // and offering a stream that won't play is worse than offering none (A-011).
+  if (!cache.cached) return undefined;
   if (!cache.files || cache.files.length === 0) return undefined;
 
   const match = pickFile(cache.files, track);

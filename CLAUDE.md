@@ -82,6 +82,17 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   disc+track position with album context, fuzzy title otherwise, and it will
   return *nothing* rather than a probably-wrong track. "Largest file" is never
   used.
+  **A-011 (don't regress):** the indexer URL is caller-supplied and fetched
+  server-side, so `src/net/` guards it — https-only in public mode, **every
+  redirect hop re-validated**, and the **validated address is the connected
+  address** (`node:http`'s `lookup` hook, so no DNS-rebinding window). **Literal
+  IP hosts are checked separately** because Node skips DNS for a numeric host and
+  a hook-only guard misses `https://169.254.169.254/…` — that bit v1. Public-safe
+  is the **default**; a loopback/LAN indexer needs
+  `BITBOP_ALLOW_PRIVATE_INDEXERS=1`. Also: a total debrid outage is an outage
+  (retryable 500), not a cached no-match; and no config field may name a mode the
+  addon can't serve — that's why AllDebrid and `cachedOnly` are out of the
+  **schema**, not merely hidden in the UI.
 
 - **`stream-legal`** (#3) — zero-config stream addon: `mbid:recording:<uuid>` →
   MusicBrainz metadata lookup → **fixed source allowlist** (Internet Archive

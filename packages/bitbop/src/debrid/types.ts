@@ -31,7 +31,7 @@ export interface CacheResult {
    * The file list, when the provider can enumerate it from cache. `pickFile`
    * needs this to choose the right track. When absent (uncached, or a provider
    * that won't list until added), file selection can't run and the candidate is
-   * skipped in `cachedOnly` mode.
+   * skipped (Bitbop only ever serves already-cached torrents).
    */
   files?: DebridFile[];
 }

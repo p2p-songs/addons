@@ -15,8 +15,8 @@
  *
  * "Cached" is `status === "downloaded"`: RD already has the bytes and resolution
  * is instant. Anything else means RD would have to fetch the torrent first,
- * which a player can't wait on mid-queue — the resolver skips those in
- * `cachedOnly` mode (the default).
+ * which a player can't wait on mid-queue — so the resolver skips those, and
+ * Bitbop only ever serves already-cached torrents.
  *
  * `fetch` is injected so the whole sequence is testable without network or a
  * real account.

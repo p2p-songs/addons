@@ -103,11 +103,49 @@ describe("resolveStreams — failure semantics", () => {
     expect(result.streams).toEqual([]);
   });
 
-  it("skips a torrent that isn't cached in cachedOnly mode", async () => {
+  it("skips a torrent that isn't cached (uncached can never resolve now)", async () => {
     const provider = providerOf({ cache: { cached: false, files: albumFiles } });
-    const result = await resolveStreams({ recordingId: RID }, config({ cachedOnly: true }), deps({ provider }));
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ provider }));
     expect(result.streams).toEqual([]);
     expect(result.outage).toBe(false);
+  });
+
+  it("reports an outage when EVERY candidate fails on a provider error (A-011)", async () => {
+    // A total debrid outage used to be swallowed into an empty success and then
+    // cached for 300s, so users saw "no source has this track" during a
+    // provider outage and recovery was delayed.
+    const provider = providerOf({
+      checkCache: async () => {
+        throw new DebridError("503 service unavailable", false); // transient, NOT auth
+      },
+    });
+    const many = [candidate, { ...candidate, infoHash: "cccccccccccccccccccccccccccccccccccccccc" }];
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf(many)], provider }));
+    expect(result.outage).toBe(true);
+    expect(result.streams).toEqual([]);
+  });
+
+  it("does NOT report an outage when candidates legitimately have nothing", async () => {
+    // Uncached / no matching file are real negative answers from a healthy
+    // provider — they must stay a cacheable no-match, not a retryable error.
+    const provider = providerOf({ cache: { cached: false } });
+    const many = [candidate, { ...candidate, infoHash: "dddddddddddddddddddddddddddddddddddddddd" }];
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf(many)], provider }));
+    expect(result.outage).toBe(false);
+    expect(result.streams).toEqual([]);
+  });
+
+  it("does NOT report an outage when some candidates fail but one succeeds", async () => {
+    const good = { ...candidate, infoHash: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" };
+    const provider = providerOf({
+      checkCache: async (hash) => {
+        if (hash !== good.infoHash) throw new DebridError("boom", false);
+        return { cached: true, files: albumFiles };
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf([candidate, good])], provider }));
+    expect(result.outage).toBe(false);
+    expect(result.streams).toHaveLength(1);
   });
 
   it("isolates a single failing torrent without sinking the whole response", async () => {

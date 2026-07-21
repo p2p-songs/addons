@@ -18,7 +18,6 @@ describe("config", () => {
 
   it("applies defaults so a minimal config is complete", () => {
     const parsed = parseConfig(valid);
-    expect(parsed?.cachedOnly).toBe(true);
     expect(parsed?.maxResults).toBe(8);
     expect(parsed?.preferFormats).toEqual(["FLAC", "MP3"]);
   });
@@ -35,6 +34,19 @@ describe("config", () => {
 
   it("rejects an unknown debrid provider rather than guessing one", () => {
     expect(parseConfig({ ...valid, debrid: { provider: "totallyreal", apiKey: "k" } })).toBeUndefined();
+  });
+
+  it("rejects a provider with no adapter, so no unusable install URL can exist (A-011)", () => {
+    // AllDebrid was selectable before its adapter existed; a config naming it
+    // generated a valid-looking URL that could never produce a stream.
+    expect(parseConfig({ ...valid, debrid: { provider: "alldebrid", apiKey: "k" } })).toBeUndefined();
+  });
+
+  it("ignores a legacy cachedOnly field rather than honoring a mode it can't serve", () => {
+    // Old install URLs may carry it; cached-only is now the unconditional contract.
+    const parsed = parseConfig({ ...valid, cachedOnly: false });
+    expect(parsed).toBeDefined();
+    expect((parsed as unknown as Record<string, unknown>)["cachedOnly"]).toBeUndefined();
   });
 
   it("returns undefined instead of throwing, so no zod message can quote the key", () => {
@@ -82,7 +94,6 @@ describe("configure page", () => {
       manifest,
     });
     expect(html).toContain("my-jackett");
-    expect(html).toContain('value="realdebrid" selected');
   });
 
   it("carries a strict CSP with a per-render nonce and no unsafe-inline", () => {

@@ -14,13 +14,25 @@ import { MusicBrainzLookup, type MetadataLookup } from "./metadata.js";
 import { TorznabIndexer } from "./indexers/torznab.js";
 import type { Indexer } from "./indexers/types.js";
 import { createProvider } from "./debrid/index.js";
+import { createGuardedFetch } from "./net/guarded-fetch.js";
 import { resolveStreams, type ResolveDeps } from "./resolve.js";
 
 export interface BitbopDeps {
   /** Shared, rate-limited MusicBrainz client (metadata lookup). */
   musicbrainz: MusicBrainzClient;
-  /** Injectable for tests; production uses the global. */
+  /**
+   * Transport for **indexer** requests. Defaults to a {@link createGuardedFetch}
+   * in public (safe) mode — indexer URLs come from the caller, so an unguarded
+   * `fetch` here is SSRF (audit A-011). Injectable for tests.
+   */
   fetchImpl?: typeof fetch;
+  /**
+   * Allow `http` and non-public indexer destinations. Off by default so a
+   * public deployment can't become an SSRF proxy; self-hosters enable it
+   * because their Jackett/Prowlarr is typically on loopback or a LAN address.
+   * Ignored when `fetchImpl` is supplied.
+   */
+  allowPrivateIndexers?: boolean;
   /** Override metadata lookup (tests). */
   metadata?: MetadataLookup;
   /** Override indexer construction (tests). */
@@ -32,6 +44,12 @@ export interface BitbopDeps {
 }
 
 export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
+  // Indexer destinations are caller-supplied, so the default transport is the
+  // guarded one (A-011). The debrid provider talks to a fixed, first-party API
+  // host, so it keeps the plain global `fetch`.
+  const indexerFetch =
+    deps.fetchImpl ?? createGuardedFetch({ allowPrivate: deps.allowPrivateIndexers ?? false });
+
   const buildResolveDeps =
     deps.buildResolveDeps ??
     ((config: BitbopConfig): ResolveDeps | undefined => {
@@ -39,7 +57,7 @@ export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
       if (!provider) return undefined; // configured provider has no adapter yet
       const indexers = deps.buildIndexers
         ? deps.buildIndexers(config)
-        : config.indexers.map((ix) => new TorznabIndexer(ix, { ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) }));
+        : config.indexers.map((ix) => new TorznabIndexer(ix, { fetchImpl: indexerFetch }));
       const metadata = deps.metadata ?? new MusicBrainzLookup(deps.musicbrainz);
       return { metadata, indexers, provider };
     });

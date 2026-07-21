@@ -16,17 +16,17 @@ export interface ProviderOptions {
 }
 
 /**
- * Build the adapter for a configured provider. Returns `undefined` for a
- * provider we don't yet support (AllDebrid is in the config enum for the
- * `/configure` UI but has no adapter yet) — the handler turns that into an
- * empty result rather than a crash.
+ * Build the adapter for a configured provider.
+ *
+ * Every id the config schema accepts has an adapter here — an unimplemented
+ * provider is kept out of the schema entirely rather than accepted and then
+ * silently yielding nothing (audit A-011). The `undefined` return remains as
+ * defence in depth for a schema/registry drift.
  */
 export function createProvider(id: DebridProviderId, options: ProviderOptions = {}): DebridProvider | undefined {
   switch (id) {
     case "realdebrid":
       return new RealDebridProvider(options);
-    case "alldebrid":
-      return undefined; // not yet implemented
     default:
       return undefined;
   }
