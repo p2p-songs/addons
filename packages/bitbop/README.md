@@ -1,0 +1,80 @@
+# Bitbop
+
+**Turns torrent bits into bops.** Bitbop is the `stream-debrid` reference addon
+(Implementation Plan §2) — one self-contained p2p-songs stream addon in the
+[Torrentio](https://github.com/TheBeastLT/torrentio-scraper) shape: it discovers
+releases on **your own** indexers, picks the right track file inside a
+whole-album torrent, and resolves it through **your own** debrid account to a
+direct, Range-servable link. The player only ever receives a resolved `https`
+URL — never a magnet, never an `infoHash`.
+
+> `bitbop` is the fun name; `stream-debrid` is the role. Same addon.
+
+## What makes it "Bitbop" and not just a debrid proxy
+
+- **One addon, no plugin layer.** Discovery, ranking, file selection, and debrid
+  resolution all live here (Plan §2). It is not an AIOStreams-style meta-layer
+  that aggregates other addons.
+- **The music-specific step (Plan §2a).** A movie torrent is one file; a music
+  torrent is a whole album. "Largest file" is meaningless, so Bitbop selects the
+  *right track* — deterministically by **disc + track position** when the request
+  carries album context (`mbid:track:` / `mbid:release:`), else by a fuzzy
+  **title** match. See [`src/pick-file.ts`](./src/pick-file.ts).
+
+## Legal posture (Plan §3 — non-negotiable)
+
+- **Your credentials, never an operator's.** Every debrid call uses the API key
+  from *that request's* `/configure` config. There is no environment variable,
+  no default, no pooled account — the config type makes the key required and the
+  addon reads it from nowhere else.
+- **Your indexers, not a bundled tracker list.** Bitbop ships discovery *logic*;
+  the Torznab endpoints come from your config. (Torrentio ships its own list; we
+  deliberately don't — "built-in discovery" and "a hardcoded illicit source" are
+  distinguishable only by who chose the source.)
+- **Never stores audio.** Bitbop holds only candidate *metadata* (title, hash,
+  size). The bytes flow debrid CDN → player; they never pass through Bitbop.
+
+## Configure
+
+Bitbop needs configuration, so the SDK router **fails closed**: a resource
+request without a valid config segment is a 400 — a handler never runs without
+your credentials. Open `/configure`, enter your debrid provider + key and your
+Torznab indexers, and it generates a personal install URL:
+
+```
+https://<your-bitbop-host>/<base64url-config>/manifest.json
+```
+
+**That URL contains your debrid key.** It's what lets Bitbop work without an
+account of its own — and it means the URL is a password. Don't share it. Your
+player stores it as a secret and shows it redacted. The `/configure` page is
+served under a strict CSP with a per-render nonce and never echoes your key back
+into the HTML.
+
+## Run
+
+```bash
+pnpm build
+PORT=7003 node dist/serve.js       # → http://127.0.0.1:7003/configure
+```
+
+There are no credential environment variables — that's by design. A deployer
+runs the service (publicly, like Torrentio, is fine); each user brings their own
+account.
+
+## Supported providers
+
+| Provider | Status |
+|---|---|
+| Real-Debrid | implemented (`src/debrid/realdebrid.ts`) |
+| AllDebrid | in the config enum; adapter not yet written |
+
+Adding one is a {@link DebridProvider} implementation plus a registry entry —
+the rest of the pipeline is provider-agnostic.
+
+## Tests
+
+`pnpm test` — 66 tests, no network or debrid account required (indexers, the
+debrid provider, and metadata are all injected behind interfaces and driven with
+fakes). The correctness-critical file-selection logic is the most heavily
+covered.

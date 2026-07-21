@@ -1,0 +1,34 @@
+{
+  "name": "@p2p-songs/bitbop",
+  "version": "0.1.0",
+  "description": "Bitbop — a p2p-songs stream addon that resolves a recording to a direct link using the requesting user's own indexers and debrid account (the stream-debrid reference addon).",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bitbop": "./dist/serve.js"
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/serve.js"
+  },
+  "dependencies": {
+    "@p2p-songs/addon-sdk": "link:../../../addon-sdk/packages/sdk",
+    "@p2p-songs/musicbrainz": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
