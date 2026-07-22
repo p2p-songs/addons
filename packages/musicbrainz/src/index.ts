@@ -13,5 +13,7 @@ export type {
   MbTrack,
   MbReleaseDetail,
 } from "./client.js";
+export { CachedMusicBrainz } from "./cache.js";
+export type { CacheOptions } from "./cache.js";
 export { RateLimiter } from "./rate-limit.js";
 export type { Sleep } from "./rate-limit.js";

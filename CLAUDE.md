@@ -58,6 +58,17 @@ versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
   Co-host addons in one process and share a limiter instance to hold the budget
   across them; separate processes each hold their own (external gateway / MB
   mirror for real multi-process scale). Audit A-006. Don't add a second MB client.
+  **Wrap it in `CachedMusicBrainz` in every `serve.ts`** (all three already do).
+  Stream resolution is **per track and just-in-time** (Plan §2), so a 12-track
+  album is 12 `/stream` requests that each look up *the same release* for its
+  disc+position: measured at **12 requests, one distinct URL — 12s of the 1
+  req/sec budget to play one album**, now 1. It caches entity lookups and the
+  discography (machine-driven, repeat verbatim) and passes free-text searches
+  through (user-typed, vary). Single-flight, because the player prefetches and
+  those lookups genuinely overlap; the caller's `AbortSignal` is deliberately
+  **not** forwarded into a shared load, so one caller's cancellation can't abort
+  another's work. Bounded and in-memory — a request-coalescing buffer, not a
+  datastore (Plan §2 keeps addons stateless).
 
 ## Status
 **Phase 3 exit criteria MET (2026-07-22)** — the full chain verified live

@@ -10,7 +10,7 @@
  * A deployer runs the service; each user brings their own account (Plan §3).
  */
 import { serveHTTP } from "@p2p-songs/addon-sdk";
-import { MusicBrainzApi } from "@p2p-songs/musicbrainz";
+import { MusicBrainzApi, CachedMusicBrainz } from "@p2p-songs/musicbrainz";
 import { createBitbopAddon } from "./handler.js";
 import { renderBitbopConfigurePage } from "./configure-page.js";
 
@@ -32,7 +32,9 @@ const userAgent =
 const allowPrivateIndexers = process.env.BITBOP_ALLOW_PRIVATE_INDEXERS === "1";
 
 const addon = createBitbopAddon({
-  musicbrainz: new MusicBrainzApi(userAgent),
+  // Cached: resolution is per track, so a 12-track album otherwise makes 12
+  // identical release lookups — 12s of MusicBrainz's 1 req/sec budget per album.
+  musicbrainz: new CachedMusicBrainz(new MusicBrainzApi(userAgent)),
   allowPrivateIndexers,
   // Redacted diagnostics only — never the raw error (it can quote a credential).
   onError: ({ message, config }) => console.error("[bitbop]", message, config),
