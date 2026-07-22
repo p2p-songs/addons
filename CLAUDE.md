@@ -131,7 +131,13 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   redirect hop re-validated**, and the **validated address is the connected
   address** (`node:http`'s `lookup` hook, so no DNS-rebinding window). **Literal
   IP hosts are checked separately** because Node skips DNS for a numeric host and
-  a hook-only guard misses `https://169.254.169.254/…` — that bit v1. Public-safe
+  a hook-only guard misses `https://169.254.169.254/…` — that bit v1. **A-012:
+  classify addresses on their bits, never their text.** `ip-policy.ts` parses
+  IPv6 into eight words and judges the embedded v4 numerically, because one
+  address has many spellings and an attacker picks the spelling: `::ffff:7f00:1`,
+  `0:0:0:0:0:ffff:7f00:1` and `::ffff:127.0.0.1` are all loopback, and the last
+  is the one form `new URL()` never yields — it rewrites the dotted quad to hex,
+  so v2's prefix regex matched only the unreachable case. Public-safe
   is the **default**; a loopback/LAN indexer needs
   `BITBOP_ALLOW_PRIVATE_INDEXERS=1`. Also: a total debrid outage is an outage
   (retryable 500), not a cached no-match; and no config field may name a mode the

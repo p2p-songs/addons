@@ -73,8 +73,12 @@ instance that is SSRF unless the destination is policed, so it is (audit A-011):
 - **Every redirect hop is re-checked** — a permitted public URL that redirects to
   `http://127.0.0.1` doesn't get a free pass.
 - **The address validated is the address connected to**, so DNS rebinding has no
-  window. Literal IPs (including `::ffff:127.0.0.1`) are checked too — Node skips
-  DNS for numeric hosts, which is exactly how such a guard usually leaks.
+  window. Literal IPs are checked too — Node skips DNS for numeric hosts, which
+  is exactly how such a guard usually leaks.
+- **Addresses are judged as numbers, not as text.** `::ffff:7f00:1`,
+  `0:0:0:0:0:ffff:7f00:1` and `::ffff:127.0.0.1` are one loopback address in
+  three spellings, so IPv6 is parsed into words and any embedded IPv4 is
+  classified as the IPv4 address it is.
 
 **Self-hosting?** Your Jackett/Prowlarr is probably on `http://localhost:9117`,
 which the above refuses. Opt in explicitly:

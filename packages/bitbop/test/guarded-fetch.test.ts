@@ -64,6 +64,27 @@ describe("guarded fetch — public mode refuses hostile destinations", () => {
     await expect(guarded("ftp://example.com/x")).rejects.toBeInstanceOf(BlockedDestinationError);
   });
 
+  /**
+   * Audit A-012. HTTPS-only doesn't save us here: the address is a literal, so
+   * no DNS runs and the `lookup` hook never sees it. The URL must be refused by
+   * the literal-host check on the *bits*, before a socket is opened — asserted
+   * via the error message, since a plain connection failure would also reject.
+   */
+  it.each([
+    ["https://[::ffff:7f00:1]/torznab", "hex mapped loopback"],
+    ["https://[::ffff:a9fe:a9fe]/latest/meta-data/", "hex mapped cloud metadata"],
+    ["https://[0:0:0:0:0:ffff:7f00:1]/torznab", "fully expanded mapped loopback"],
+    ["https://[::ffff:c0a8:101]/torznab", "hex mapped LAN"],
+  ])("refuses %s (%s)", async (url) => {
+    await expect(createGuardedFetch({ allowPrivate: false })(url)).rejects.toThrow(/non-public address/);
+  });
+
+  it("refuses the mapped loopback that actually reaches our local server", async () => {
+    const before = hits.length;
+    await expect(guarded(`https://[::ffff:7f00:1]:${port}/admin`)).rejects.toThrow(/non-public address/);
+    expect(hits.length).toBe(before); // the internal service was never contacted
+  });
+
   it("refuses a hostname that resolves to loopback (localhost)", async () => {
     const before = hits.length;
     await expect(guarded(`https://localhost:${port}/torznab`)).rejects.toBeInstanceOf(BlockedDestinationError);

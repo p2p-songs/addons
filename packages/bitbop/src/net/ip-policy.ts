@@ -24,8 +24,12 @@ export function isPublicAddress(address: string, family: number): boolean {
 function ipv4Octets(address: string): number[] | undefined {
   const parts = address.split(".");
   if (parts.length !== 4) return undefined;
+  // Plain decimal only. `Number()` alone would read "0x7f" as 127 and "1e2" as
+  // 100, so a hostile spelling could reach a range check by a route the tests
+  // don't cover. Anything else is undefined ⇒ denied.
+  if (parts.some((p) => !/^\d{1,3}$/.test(p))) return undefined;
   const octets = parts.map((p) => Number(p));
-  if (octets.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return undefined;
+  if (octets.some((n) => n > 255)) return undefined;
   return octets;
 }
 
@@ -51,20 +55,77 @@ function isPublicIpv4(address: string): boolean {
   return true;
 }
 
+/**
+ * Parse an IPv6 literal into its eight 16-bit words, or `undefined` if the text
+ * isn't well-formed IPv6 — which callers treat as "deny".
+ *
+ * We classify on the **numbers**, never on the text, because one address has
+ * many spellings and the interesting ones are chosen by an attacker.
+ * `::ffff:127.0.0.1`, `::ffff:7f00:1` and `0:0:0:0:0:ffff:7f00:1` are the same
+ * 128 bits; a prefix regex sees three unrelated strings.
+ */
+function ipv6Words(address: string): number[] | undefined {
+  const halves = address.split("::");
+  if (halves.length > 2) return undefined; // "::" may appear at most once
+
+  const head = ipv6Groups(halves[0]!);
+  const tail = halves.length === 2 ? ipv6Groups(halves[1]!) : [];
+  if (!head || !tail) return undefined;
+
+  if (halves.length === 1) return head.length === 8 ? head : undefined;
+  const gap = 8 - head.length - tail.length;
+  if (gap < 1) return undefined; // "::" must stand for at least one zero word
+  return [...head, ...(Array<number>(gap).fill(0) as number[]), ...tail];
+}
+
+/** One colon-separated run of hex groups; its last group may be a dotted quad. */
+function ipv6Groups(text: string): number[] | undefined {
+  if (text === "") return [];
+  const parts = text.split(":");
+  const words: number[] = [];
+  for (const [i, part] of parts.entries()) {
+    if (i === parts.length - 1 && part.includes(".")) {
+      const quad = ipv4Octets(part);
+      if (!quad) return undefined;
+      words.push((quad[0]! << 8) | quad[1]!, (quad[2]! << 8) | quad[3]!);
+      continue;
+    }
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return undefined;
+    words.push(Number.parseInt(part, 16));
+  }
+  return words;
+}
+
+/** The v4 destination carried in the low 32 bits, judged as the v4 address it is. */
+function embeddedIpv4IsPublic(w: number[]): boolean {
+  const [hi, lo] = [w[6]!, w[7]!];
+  return isPublicIpv4([hi >> 8, hi & 0xff, lo >> 8, lo & 0xff].join("."));
+}
+
 function isPublicIpv6(address: string): boolean {
-  const addr = address.toLowerCase().split("%")[0]!; // drop any zone index
+  const w = ipv6Words(address.toLowerCase().split("%")[0]!); // drop any zone index
+  if (!w) return false; // unparseable → deny
 
-  // IPv4-mapped/compatible (::ffff:1.2.3.4, ::1.2.3.4) — judge the embedded v4.
-  const mapped = /^::(?:ffff:)?(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(addr);
-  if (mapped) return isPublicIpv4(mapped[1]!);
+  const topIsZero = w[0] === 0 && w[1] === 0 && w[2] === 0 && w[3] === 0;
+  if (topIsZero) {
+    // ::/96 — unspecified, loopback, and IPv4-compatible (`::1.2.3.4`).
+    if (w[4] === 0 && w[5] === 0) {
+      if (w[6] === 0 && w[7]! <= 1) return false; // :: and ::1
+      return embeddedIpv4IsPublic(w);
+    }
+    // Both v4-in-v6 forms reach a v4 host, so both are judged as that host:
+    // ::ffff:0:0/96 (mapped) and ::ffff:0:0:0/96 (translated).
+    if ((w[4] === 0 && w[5] === 0xffff) || (w[4] === 0xffff && w[5] === 0)) {
+      return embeddedIpv4IsPublic(w);
+    }
+  }
 
-  if (addr === "::" || addr === "::1") return false; // unspecified / loopback
-  if (/^f[cd]/.test(addr)) return false; // fc00::/7 unique-local
-  if (/^fe[89ab]/.test(addr)) return false; // fe80::/10 link-local
-  if (/^ff/.test(addr)) return false; // ff00::/8 multicast
-  if (addr.startsWith("64:ff9b:")) return false; // NAT64 → can reach v4 private space
-  if (addr.startsWith("2001:db8:")) return false; // documentation
-  if (addr.startsWith("2002:")) return false; // 6to4 — embeds an arbitrary v4 destination
+  if ((w[0]! & 0xfe00) === 0xfc00) return false; // fc00::/7 unique-local
+  if ((w[0]! & 0xffc0) === 0xfe80) return false; // fe80::/10 link-local
+  if ((w[0]! & 0xff00) === 0xff00) return false; // ff00::/8 multicast
+  if (w[0] === 0x0064 && w[1] === 0xff9b) return false; // NAT64 → can reach v4 private space
+  if (w[0] === 0x2001 && w[1] === 0x0db8) return false; // documentation
+  if (w[0] === 0x2002) return false; // 6to4 — embeds an arbitrary v4 destination
   return true;
 }
 
