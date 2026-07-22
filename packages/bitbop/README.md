@@ -87,6 +87,13 @@ which the above refuses. Opt in explicitly:
 BITBOP_ALLOW_PRIVATE_INDEXERS=1 PORT=7003 node dist/serve.js
 ```
 
+> **Only ever set this on an instance whose only user is you.** The policy
+> exists because the indexer URL is *caller*-supplied; the flag removes it for
+> everyone, so on a shared instance it turns Bitbop into an SSRF proxy against
+> your own network. It is not the fix for "a user says their indexer is
+> unreachable" — see [`DEPLOYMENT.md`](https://github.com/p2p-songs/.github/blob/main/docs/DEPLOYMENT.md)
+> for what is.
+
 Only ever set that on an instance **you alone can reach** — it is precisely the
 policy that makes a public instance safe. The active mode is logged at startup
 and shown on the `/configure` page, which pre-checks your URL against it.
