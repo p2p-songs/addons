@@ -32,7 +32,7 @@ export async function metaFor(id: string, deps: MetaDeps, signal?: AbortSignal):
       return { type: "artist", id: formatMbid("artist", a.id) as ArtistId, name: a.name };
     }
     case "release": {
-      const r = await deps.mb.getRelease(uuid, signal);
+      const r = await deps.mb.getAlbum(uuid, signal);
       if (!r) return undefined;
       return {
         type: "album",

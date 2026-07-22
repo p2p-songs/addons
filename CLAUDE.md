@@ -205,6 +205,25 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   Ids stay `mbid:release:` so nothing downstream changes, but **posters now come
   from the release *group*** — art is uploaded per pressing, so a group-less
   poster URL is why some rows showed a broken thumbnail.
+
+  **Album meta goes through `getAlbum`, not `getRelease`** — and that is a
+  playability fix, not a cosmetic one. A release group mixes the original album
+  with its later deluxe/anniversary/expanded editions, and the discography
+  search **cannot tell them apart**: its embedded releases carry only `id`,
+  `title` and `status`. So evermore resolved to a **17-track deluxe**
+  (2021-01-07) instead of the **15-track original** (2020-12-11), and its two
+  bonus tracks were then unplayable — they are on no ordinary rip, so `pickFile`
+  correctly refused rather than serving the wrong song. 15 played, 2 didn't.
+  `getAlbum` swaps a later edition for the album as first released, which is the
+  **conservative direction**: a deluxe only ever *appends*, so positions 1..n
+  still line up if the source turns out to be a deluxe rip and the user merely
+  doesn't see bonus tracks; the reverse advertises tracks that usually cannot be
+  found. It is **free in the common case** — `getRelease` already asks for
+  `release-groups`, so a pressing whose date equals the group's
+  `first-release-date` is returned untouched. Consequence to know:
+  **`meta.id` may differ from the catalog row's id.** The catalog row is an
+  entry point into the album; meta names the edition actually chosen, and that
+  is the id the player then hands Bitbop as album context.
   **Which pressing represents the group is correctness-critical, not cosmetic.**
   We shipped the Taiwanese SOUR — tracks titled `brutal 残酷`, artist credited
   `奧莉維亞` — and that name reaches Bitbop's indexer query, so every search was
@@ -239,7 +258,7 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   names *are* non-Latin agrees with their own group title and artist name, so
   their pressings pass and the choice falls through to date.
 
-  16 musicbrainz tests / 17 musicmeta tests.
+  27 musicbrainz tests / 17 musicmeta tests.
 
 All three consume the shared rate-limited `@p2p-songs/musicbrainz` client;
 sources, indexers, and debrid providers are injected behind interfaces

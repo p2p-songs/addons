@@ -39,6 +39,9 @@ export class FakeMusicBrainz implements MusicBrainzClient {
   async getRelease(uuid: string): Promise<MbReleaseDetail | undefined> {
     return this.data.releaseDetail?.[uuid];
   }
+  async getAlbum(uuid: string): Promise<MbReleaseDetail | undefined> {
+    return this.data.releaseDetail?.[uuid];
+  }
   async getRecording(uuid: string): Promise<MbRecording | undefined> {
     return this.data.recording?.[uuid];
   }

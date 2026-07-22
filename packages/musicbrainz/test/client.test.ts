@@ -239,3 +239,80 @@ describe("artistDiscography", () => {
     expect(asked).toHaveLength(2);
   });
 });
+
+describe("getAlbum (the album, not an arbitrary edition)", () => {
+  const GID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+  const DELUXE = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+  const ORIGINAL = "00000000-0000-0000-0000-000000000000";
+
+  /** A release lookup + a release-group browse, counting what was asked for. */
+  const albumFetch = (asked: string[]): typeof fetch =>
+    (async (input: string | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      asked.push(url);
+      const media = (n: number) => [{
+        position: 1,
+        "track-count": n,
+        tracks: Array.from({ length: n }, (_, i) => ({
+          id: `t${i}`, number: String(i + 1), title: `Track ${i + 1}`, recording: { id: `rec${i}` },
+        })),
+      }];
+      const group = { id: GID, title: "evermore", "first-release-date": "2020-12-11" };
+      if (url.includes(`/release/${DELUXE}`)) {
+        return new Response(JSON.stringify({
+          id: DELUXE, title: "evermore", date: "2021-01-07",
+          "artist-credit": [{ name: "Taylor Swift", artist: { id: "a1", name: "Taylor Swift" } }],
+          "release-group": group, media: media(17),
+        }), { status: 200 });
+      }
+      if (url.includes(`/release/${ORIGINAL}`)) {
+        return new Response(JSON.stringify({
+          id: ORIGINAL, title: "evermore", date: "2020-12-11",
+          "artist-credit": [{ name: "Taylor Swift", artist: { id: "a1", name: "Taylor Swift" } }],
+          "release-group": group, media: media(15),
+        }), { status: 200 });
+      }
+      // the release-group browse
+      return new Response(JSON.stringify({ releases: [
+        { id: "padded", title: "evermore", date: "2020-12-11", "release-group": group,
+          "artist-credit": [{ name: "Taylor Swift", artist: { id: "a1", name: "Taylor Swift" } }], media: media(19) },
+        { id: ORIGINAL, title: "evermore", date: "2020-12-11", "release-group": group,
+          "artist-credit": [{ name: "Taylor Swift", artist: { id: "a1", name: "Taylor Swift" } }], media: media(15) },
+        { id: "later", title: "evermore", date: "2021-01-07", "release-group": group,
+          "artist-credit": [{ name: "Taylor Swift", artist: { id: "a1", name: "Taylor Swift" } }], media: media(17) },
+      ] }), { status: 200 });
+    }) as typeof fetch;
+
+  it("swaps a later deluxe edition for the album as first released", async () => {
+    // The live failure: evermore resolved to the 17-track deluxe (2021-01-07)
+    // instead of the 15-track original (2020-12-11), so tracks 16 and 17 were
+    // on no ordinary rip and pickFile correctly refused. 15 played, 2 did not.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(albumFetch(asked)));
+    const album = await api.getAlbum(DELUXE);
+    expect(album!.id).toBe(ORIGINAL);
+    expect(album!.tracks).toHaveLength(15);
+  });
+
+  it("prefers the shortest of several same-dated originals", async () => {
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(albumFetch(asked)));
+    const album = await api.getAlbum(DELUXE);
+    expect(album!.id).toBe(ORIGINAL); // not "padded" (19 tracks, same date)
+  });
+
+  it("costs nothing extra when the pressing already is the original", async () => {
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(albumFetch(asked)));
+    const album = await api.getAlbum(ORIGINAL);
+    expect(album!.id).toBe(ORIGINAL);
+    expect(asked).toHaveLength(1); // no group browse, no second lookup
+  });
+
+  it("asks for the release group, which is what makes that free", async () => {
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(albumFetch(asked)));
+    await api.getRelease(ORIGINAL);
+    expect(asked[0]).toContain("release-groups");
+  });
+});

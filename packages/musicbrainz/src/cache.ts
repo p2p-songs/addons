@@ -107,6 +107,10 @@ export class CachedMusicBrainz implements MusicBrainzClient {
     return this.getOrLoad(`release:${uuid}`, () => this.inner.getRelease(uuid, signal));
   }
 
+  getAlbum(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined> {
+    return this.getOrLoad(`album:${uuid}`, () => this.inner.getAlbum(uuid, signal));
+  }
+
   getRecording(uuid: string, signal?: AbortSignal): Promise<MbRecording | undefined> {
     return this.getOrLoad(`recording:${uuid}`, () => this.inner.getRecording(uuid, signal));
   }

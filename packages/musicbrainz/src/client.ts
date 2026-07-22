@@ -48,6 +48,10 @@ export interface MbTrack {
 }
 export interface MbReleaseDetail extends MbRelease {
   tracks: MbTrack[];
+  /** The album this pressing belongs to. */
+  releaseGroupId?: string;
+  /** The album's first release date — how a later edition is told from the original. */
+  groupFirstReleaseDate?: string;
 }
 /**
  * One album in an artist's discography: a release *group*, plus the one
@@ -71,7 +75,10 @@ export interface MusicBrainzClient {
   /** An artist's studio albums, newest first (see the implementation). */
   artistDiscography(artistUuid: string, limit: number, signal?: AbortSignal): Promise<MbAlbum[]>;
   getArtist(uuid: string, signal?: AbortSignal): Promise<MbArtist | undefined>;
+  /** Exactly the release asked for. */
   getRelease(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined>;
+  /** The album as first released — see the implementation. */
+  getAlbum(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined>;
   getRecording(uuid: string, signal?: AbortSignal): Promise<MbRecording | undefined>;
 }
 
@@ -235,7 +242,9 @@ export class MusicBrainzApi implements MusicBrainzClient {
 
   async getRelease(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined> {
     const r = await this.get<RawRelease>(
-      `/release/${uuid}?fmt=json&inc=recordings+artist-credits+media`,
+      // `release-groups` is free here and is what lets `getAlbum` tell an
+      // original pressing from a later deluxe edition without a second request.
+      `/release/${uuid}?fmt=json&inc=recordings+artist-credits+media+release-groups`,
       signal,
     );
     if (!r) return undefined;
@@ -259,7 +268,51 @@ export class MusicBrainzApi implements MusicBrainzClient {
         tracks.push(track);
       }
     });
-    return { ...toRelease(r), tracks };
+    const detail: MbReleaseDetail = { ...toRelease(r), tracks };
+    const group = r["release-group"];
+    if (group?.id) detail.releaseGroupId = group.id;
+    if (group?.["first-release-date"]) detail.groupFirstReleaseDate = group["first-release-date"];
+    return detail;
+  }
+
+  /**
+   * The album as **first released**, given any pressing of it.
+   *
+   * A release group mixes the original album with its later deluxe, anniversary
+   * and expanded editions, and the discography search cannot tell them apart —
+   * its embedded releases carry only id, title and status, no date and no track
+   * count. So evermore resolved to a 17-track deluxe (2021-01-07) rather than
+   * the 15-track original (2020-12-11), and its two bonus tracks were then
+   * unplayable: they exist on no ordinary rip, so `pickFile` correctly refused
+   * rather than serving the wrong song. Fifteen tracks played, two did not.
+   *
+   * Choosing the original is the conservative direction. A deluxe edition only
+   * ever *appends*, so positions 1..n still line up if the source turns out to
+   * be a deluxe rip — the user simply doesn't see bonus tracks. The reverse,
+   * which is what we shipped, advertises tracks that usually cannot be found.
+   *
+   * Costs nothing in the common case: `getRelease` already returns the group's
+   * `first-release-date`, so a pressing that matches it is returned as-is.
+   */
+  async getAlbum(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined> {
+    const requested = await this.getRelease(uuid, signal);
+    if (!requested) return undefined;
+    const groupId = requested.releaseGroupId;
+    const originalDate = requested.groupFirstReleaseDate;
+    if (!groupId || !originalDate || requested.date === originalDate) return requested;
+
+    const body = await this.get<{ releases?: RawRelease[] }>(
+      `/release?release-group=${encodeURIComponent(groupId)}&status=official` +
+        `&inc=artist-credits+media+release-groups&fmt=json&limit=${SEARCH_MAX_LIMIT}`,
+      signal,
+    );
+    const originals = (body?.releases ?? []).filter((r) => r.date === originalDate);
+    let best = originals[0];
+    for (const candidate of originals.slice(1)) {
+      if (best && betterEdition(candidate, best)) best = candidate;
+    }
+    if (!best || best.id === uuid) return requested;
+    return this.getRelease(best.id, signal);
   }
 
   async getRecording(uuid: string, signal?: AbortSignal): Promise<MbRecording | undefined> {
@@ -294,7 +347,7 @@ interface RawRelease {
   date?: string;
   "artist-credit"?: RawArtistCredit[];
   "release-group"?: RawReleaseGroup;
-  media?: { position?: number; tracks?: RawTrack[] }[];
+  media?: { position?: number; "track-count"?: number; tracks?: RawTrack[] }[];
 }
 /** A release-group *search* hit, which — unlike a browse — embeds its releases. */
 interface RawSearchReleaseGroup {
@@ -310,6 +363,8 @@ interface RawReleaseGroup {
   id: string;
   /** The album's canonical title, as opposed to this pressing's. */
   title?: string;
+  /** The album's original release date, as opposed to this pressing's. */
+  "first-release-date"?: string;
   /** "Album" | "Single" | "EP" | "Broadcast" | "Other". */
   "primary-type"?: string;
   /** "Live" | "Compilation" | "Remix" | "DJ-mix" | "Bootleg" | … — any of these disqualifies. */
@@ -339,6 +394,22 @@ function representativeRelease(group: RawSearchReleaseGroup): string | undefined
   if (official.length === 0) return undefined;
   const exact = official.find((r) => normalizeName(r.title) === normalizeName(group.title));
   return (exact ?? official[0])!.id;
+}
+
+/**
+ * Which of two same-dated original pressings to prefer: canonically named
+ * first (the localization rule), then the shortest track list — a pressing
+ * padded with bonus material is a worse stand-in for the album than a plain one.
+ */
+function betterEdition(candidate: RawRelease, incumbent: RawRelease): boolean {
+  const c = presentsCanonicalNames(candidate);
+  const i = presentsCanonicalNames(incumbent);
+  if (c !== i) return c;
+  return trackCount(candidate) < trackCount(incumbent);
+}
+
+function trackCount(r: RawRelease): number {
+  return (r.media ?? []).reduce((n, m) => n + (m["track-count"] ?? 0), 0);
 }
 
 /**
