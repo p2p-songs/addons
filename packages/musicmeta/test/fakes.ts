@@ -16,6 +16,7 @@ export class FakeMusicBrainz implements MusicBrainzClient {
       releaseDetail?: Record<string, MbReleaseDetail>;
       artist?: Record<string, MbArtist>;
       recording?: Record<string, MbRecording>;
+      artistReleases?: MbRelease[];
     } = {},
   ) {}
 
@@ -27,6 +28,9 @@ export class FakeMusicBrainz implements MusicBrainzClient {
   }
   async searchRecordings(): Promise<MbRecording[]> {
     return this.data.recordings ?? [];
+  }
+  async browseArtistReleases(): Promise<MbRelease[]> {
+    return this.data.artistReleases ?? [];
   }
   async getArtist(uuid: string): Promise<MbArtist | undefined> {
     return this.data.artist?.[uuid];

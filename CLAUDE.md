@@ -167,7 +167,18 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   MusicBrainz search → `metaPreview[]` with entity-typed ids per content type;
   MusicBrainz lookup → `metaDetail`, where album meta carries `tracks[]` with
   **both** `recordingId` (streamable) and `trackId` (album context: disc +
-  free-text position). Cover Art Archive posters. 14 tests.
+  free-text position). Cover Art Archive posters. **Artist search leads
+  somewhere:** a `byArtist` album catalog (`artistId` extra) returns the
+  artist's discography as ordinary `mbid:release:` previews, so the player's
+  album screen needs no special case. Three MusicBrainz facts make that list
+  usable, and skipping any one produces a plausible-looking but useless result:
+  a release *group* is the album while a release is one pressing (collapse to
+  the earliest — the original, least likely to carry bonus-track padding);
+  `primary-type: Album` still admits **live records, compilations and
+  bootlegs**, so any `secondary-types` disqualifies (unfiltered, Radiohead
+  returned 25 rows with zero studio albums); and browse pages at 100 in no
+  useful order, so `type=album&status=official` filters server-side (1140
+  releases → 274) to make a 3-page cap actually cover a discography. 17 tests.
 
 All three consume the shared rate-limited `@p2p-songs/musicbrainz` client;
 sources, indexers, and debrid providers are injected behind interfaces

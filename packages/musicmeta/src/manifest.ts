@@ -17,6 +17,10 @@ export const manifest: Manifest = {
     { type: "track", id: "search", name: "Songs", extra: [{ name: "search", isRequired: true }] },
     { type: "album", id: "search", name: "Albums", extra: [{ name: "search", isRequired: true }] },
     { type: "artist", id: "search", name: "Artists", extra: [{ name: "search", isRequired: true }] },
+    // Artist search returns only an id and a name, so without this an artist
+    // result is a dead end. Ids are `mbid:release:` — the same shape album
+    // search emits — so an album screen needs no special case for them.
+    { type: "album", id: "byArtist", name: "Discography", extra: [{ name: "artistId", isRequired: true }] },
   ],
   behaviorHints: { p2p: false, configurable: false },
 };

@@ -7,6 +7,7 @@
  */
 import {
   formatMbid,
+  parseMbid,
   type ContentType,
   type MetaPreview,
   type ArtistId,
@@ -19,6 +20,33 @@ import { releaseFrontCover } from "./coverart.js";
 export interface CatalogDeps {
   mb: MusicBrainzClient;
   limit?: number;
+}
+
+/**
+ * An artist's discography, as album previews.
+ *
+ * This is what makes artist *search* lead anywhere: a search result is only an
+ * id and a name, so without a way to go id → albums, finding an artist is a
+ * dead end. Ids are `mbid:release:`, the same shape album search emits, so the
+ * player's existing album screen handles them with no special casing.
+ */
+export async function artistAlbumsCatalog(
+  artistId: string,
+  deps: CatalogDeps,
+  signal?: AbortSignal,
+): Promise<MetaPreview[]> {
+  const { uuid } = parseMbid(artistId);
+  if (!uuid) return [];
+  const releases = await deps.mb.browseArtistReleases(uuid, deps.limit ?? 25, signal);
+  return releases.map((r) => ({
+    type: "album",
+    id: formatMbid("release", r.id) as ReleaseId,
+    name: r.title,
+    poster: releaseFrontCover(r.id),
+    // The year disambiguates a re-recording from the original far better than
+    // the artist name does here — every row shares the artist already.
+    ...(r.date ? { description: r.date.slice(0, 4) } : r.artist ? { description: r.artist } : {}),
+  }));
 }
 
 export async function searchCatalog(
