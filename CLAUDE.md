@@ -60,6 +60,13 @@ versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
   mirror for real multi-process scale). Audit A-006. Don't add a second MB client.
 
 ## Status
+**Phase 3 exit criteria MET (2026-07-22)** — the full chain verified live
+against a real debrid account and a self-hosted Prowlarr, the one thing CI can
+never cover. `pickFile` chose correctly **26/26** on real album torrents. The
+finding to remember: **Real-Debrid's file ids are not track order** (file id 1
+was track 13), so any id-order or largest-file shortcut serves the wrong song
+confidently — Plan §2a, now empirically confirmed rather than argued.
+
 **`stream-legal` + `musicmeta` implemented (2026-07-19, Plan Phase 3);
 `bitbop` implemented (2026-07-21, Plan Phase 3 #6).** The addon side of the
 discovery→stream loop is complete and verified end-to-end (musicmeta album meta

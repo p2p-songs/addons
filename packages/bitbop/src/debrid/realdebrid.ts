@@ -58,7 +58,7 @@ const STATUS_IN_PROGRESS = new Set(["queued", "downloading", "compressing", "upl
 const STATUS_TERMINAL_ERROR = new Set(["magnet_error", "error", "virus", "dead"]);
 
 /**
- * Wall-clock budget for driving a freshly-added torrent to a verdict.
+ * Wall-clock budget for taking a torrent from "unknown" to a verdict.
  *
  * Calibrated against the live API rather than guessed. Measured on a cached
  * torrent: `addMagnet` → 250ms, `waiting_files_selection` → 636ms, selection
@@ -66,10 +66,17 @@ const STATUS_TERMINAL_ERROR = new Set(["magnet_error", "error", "virus", "dead"]
  * 3s is a little over 2× the observed flip — enough headroom for a slower link
  * or an album with many files, without waiting on anything real.
  *
- * This is a **wall-clock** bound, deliberately. An earlier version counted poll
- * *attempts*, which ignored the ~260ms round-trip each attempt costs and made a
- * nominal "2.5s" budget take 4.8s in practice — most of it spent after the point
- * where a cached torrent would already have answered.
+ * The budget covers **the whole check**, starting before `addMagnet`, not just
+ * the polling. Two rounds of getting this wrong:
+ *
+ *  1. Counting poll *attempts* ignored the ~260ms round-trip each one costs, so
+ *     a nominal 2.5s budget ran 4.8s.
+ *  2. Making it wall-clock but starting the clock *after* the add and selection
+ *     left three fixed round-trips outside it — measured against a live account,
+ *     misses cost 848ms–6844ms against a "3s" budget.
+ *
+ * Only the cleanup `delete` sits outside, because it must run regardless of how
+ * much time is left.
  */
 const CACHE_SETTLE_BUDGET_MS = 3_000;
 const CACHE_POLL_INTERVAL_MS = 400;
@@ -163,11 +170,15 @@ export class RealDebridProvider implements DebridProvider {
         : { cached: false };
     }
 
+    // Start the clock *before* the add: the add, the first info, and the
+    // selection call are three round-trips that must come out of the budget,
+    // not sit outside it.
+    const deadline = this.now() + this.settleBudgetMs;
     const id = await this.addMagnet(ref.infoHash, apiKey, signal);
     // From here every exit path must either keep a *cached* torrent or delete
-    // what we just added. `ours` is what makes the cleanup safe to do at all.
+    // what we just added — that is what makes the cleanup safe to do at all.
     try {
-      const info = await this.selectAudioAndSettle(id, apiKey, signal);
+      const info = await this.selectAudioAndSettle(id, apiKey, deadline, signal);
       if (info.status !== STATUS_DOWNLOADED) {
         await this.deleteQuietly(id, apiKey);
         return { cached: false };
@@ -182,7 +193,7 @@ export class RealDebridProvider implements DebridProvider {
   async resolveFile(ref: TorrentRef, fileId: string, apiKey: string, signal?: AbortSignal): Promise<ResolvedLink> {
     const info = ref.handle
       ? await this.info(ref.handle, apiKey, signal)
-      : await this.selectAudioAndSettle(await this.addMagnet(ref.infoHash, apiKey, signal), apiKey, signal);
+      : await this.settleFresh(ref.infoHash, apiKey, signal);
 
     if (info.status !== STATUS_DOWNLOADED) {
       throw new DebridError(`torrent not cached (status: ${info.status})`);
@@ -209,16 +220,29 @@ export class RealDebridProvider implements DebridProvider {
   // --- the state machine ---
 
   /**
+   * Add a torrent and drive it to a verdict under one budget. Used by
+   * `resolveFile` when it has no handle — a caller that skipped `checkCache`,
+   * or whose handle went stale.
+   */
+  private async settleFresh(infoHash: string, apiKey: string, signal?: AbortSignal): Promise<RdInfo> {
+    const deadline = this.now() + this.settleBudgetMs;
+    const id = await this.addMagnet(infoHash, apiKey, signal);
+    return this.selectAudioAndSettle(id, apiKey, deadline, signal);
+  }
+
+  /**
    * Drive a freshly-added torrent to a verdict: wait for file selection to be
    * possible, select **audio only**, then give it a short budget to flip to
    * `downloaded`. Returns whatever status it settled on — the caller decides
    * whether that means "cached" and owns the cleanup.
    */
-  private async selectAudioAndSettle(id: string, apiKey: string, signal?: AbortSignal): Promise<RdInfo> {
-    // One wall-clock deadline shared by both phases below, so the whole
-    // operation is bounded wherever the time goes — including the round-trip
-    // each poll costs, which is most of it.
-    const deadline = this.now() + this.settleBudgetMs;
+  private async selectAudioAndSettle(
+    id: string,
+    apiKey: string,
+    /** Absolute deadline set by the caller, before the torrent was even added. */
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<RdInfo> {
     let info = await this.info(id, apiKey, signal);
 
     // A brand-new magnet is briefly in `magnet_conversion` before RD can list files.

@@ -173,16 +173,21 @@ describe("RealDebridProvider.checkCache", () => {
     expect(result.cached).toBe(false);
   });
 
-  it("bounds the whole check by wall clock, counting round-trips not just sleeps", async () => {
-    // The live API answers a *cached* torrent in ~1330ms, and each poll costs
-    // ~260ms of network. Counting attempts instead of elapsed time made a
-    // nominal 2.5s budget run 4.8s — long after a cached torrent had answered.
+  it("bounds the whole check by wall clock, add and selection included", async () => {
+    // Two rounds of getting this wrong, both caught by measurement rather than
+    // review: counting poll *attempts* ignored the ~260ms round-trip each costs
+    // (a "2.5s" budget ran 4.8s), and then starting the clock after the add left
+    // three fixed round-trips outside it (misses cost up to 6.8s against "3s").
+    // Here every call advances the clock, including the ones before polling.
     const fake = fakeRd({ settledStatus: "downloading" });
     let clock = 0;
     const provider = new RealDebridProvider({
-      fetchImpl: fake.impl as unknown as typeof fetch,
+      fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+        clock += 260; // every round-trip costs, not just the sleeps
+        return fake.impl(...args);
+      }) as unknown as typeof fetch,
       sleep: async (ms) => {
-        clock += ms + 260;
+        clock += ms;
       },
       now: () => clock,
       settleBudgetMs: 3_000,
@@ -190,7 +195,9 @@ describe("RealDebridProvider.checkCache", () => {
 
     const result = await provider.checkCache({ infoHash: HASH }, "RDKEY");
     expect(result.cached).toBe(false);
-    expect(clock).toBeLessThanOrEqual(3_000 + 660); // at most one poll overruns the deadline
+    // Budget + at most one overrunning poll + the cleanup delete, which is
+    // deliberately outside the budget because it must always run.
+    expect(clock).toBeLessThanOrEqual(3_000 + 660 + 260);
   });
 
   it("adds nothing when given a handle for a torrent already on the account", async () => {

@@ -135,6 +135,32 @@ account. A cached torrent settles in **~1330 ms** and API round-trips run
 a hash the account already holds returns a **new** torrent id, so Real-Debrid does
 *not* deduplicate — that single fact is why the pre-pass exists.
 
+## Verified end to end (2026-07-22)
+
+The whole chain has been run against a real Real-Debrid account and a real
+self-hosted Prowlarr — the Plan's Phase 3 exit criterion, which no CI can cover:
+
+> player → musicmeta → Bitbop → MusicBrainz → Torznab → RD cache check →
+> `pickFile` → unrestrict → https link → audio playing
+
+**`pickFile` chose correctly 26/26**, across two independently-encoded rips of
+the same album (13/13 each by disc+position, plus the fuzzy path). The reason
+that matters is visible in one of those rips:
+
+```
+file id  1  →  13. cigarette smoke.flac     ← track 13
+file id 13  →  01. drop dead.flac           ← track 1
+```
+
+**Real-Debrid's file ids are not track order.** An implementation that assumed
+they were — or that reached for Torrentio's largest-file heuristic — would have
+served the wrong song for every request, confidently. That is the entire reason
+[`pick-file.ts`](./src/pick-file.ts) exists.
+
+Two matches also survived only because of normalization: a request for
+`u + me = -3` matched `05. u + me = 3.flac`, and `what’s wrong with me` carries a
+curly apostrophe (U+2019) that NFKD folds. Naive string comparison misses both.
+
 ## Tests
 
 `pnpm test` — 160 tests, no network or debrid account required (indexers, the
