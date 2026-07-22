@@ -15,7 +15,7 @@ import {
   type RecordingId,
 } from "@p2p-songs/addon-sdk";
 import type { MusicBrainzClient } from "@p2p-songs/musicbrainz";
-import { releaseFrontCover } from "./coverart.js";
+import { releaseFrontCover, releaseGroupFrontCover } from "./coverart.js";
 
 export interface CatalogDeps {
   mb: MusicBrainzClient;
@@ -37,15 +37,16 @@ export async function artistAlbumsCatalog(
 ): Promise<MetaPreview[]> {
   const { uuid } = parseMbid(artistId);
   if (!uuid) return [];
-  const releases = await deps.mb.browseArtistReleases(uuid, deps.limit ?? 25, signal);
-  return releases.map((r) => ({
+  const albums = await deps.mb.artistDiscography(uuid, deps.limit ?? 25, signal);
+  return albums.map((a) => ({
     type: "album",
-    id: formatMbid("release", r.id) as ReleaseId,
-    name: r.title,
-    poster: releaseFrontCover(r.id),
+    id: formatMbid("release", a.id) as ReleaseId,
+    name: a.title,
+    // Group art, not the representative pressing's — a pressing often has none.
+    poster: releaseGroupFrontCover(a.releaseGroupId),
     // The year disambiguates a re-recording from the original far better than
     // the artist name does here — every row shares the artist already.
-    ...(r.date ? { description: r.date.slice(0, 4) } : r.artist ? { description: r.artist } : {}),
+    ...(a.date ? { description: a.date.slice(0, 4) } : a.artist ? { description: a.artist } : {}),
   }));
 }
 

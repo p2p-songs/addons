@@ -122,161 +122,120 @@ describe("searchReleases (album search)", () => {
   });
 });
 
-describe("browseArtistReleases (discography)", () => {
+describe("artistDiscography", () => {
   const ARTIST = "cccccccc-cccc-cccc-cccc-cccccccccccc";
-  const group = (id: string, primary?: string, secondary?: string[]) => ({
+
+  /** A release-group search hit, with its releases embedded as the API sends them. */
+  const rg = (
+    id: string,
+    title: string,
+    date: string | undefined,
+    releases: { id: string; title?: string; status?: string }[],
+  ) => ({
     id,
-    ...(primary ? { "primary-type": primary } : {}),
-    ...(secondary ? { "secondary-types": secondary } : {}),
+    title,
+    ...(date ? { "first-release-date": date } : {}),
+    "artist-credit": [{ name: "Some Artist", artist: { id: "a1", name: "Some Artist" } }],
+    releases: releases.map((r) => ({ id: r.id, title: r.title ?? title, ...(r.status ? { status: r.status } : {}) })),
   });
 
-  /** Serve one page of releases, recording the URLs asked for. */
+  /** Serve pages of release-group search results, recording the URLs asked for. */
   const pagedFetch = (pages: unknown[][], asked: string[]): typeof fetch =>
     (async (input: string | URL) => {
       const url = typeof input === "string" ? input : input.toString();
       asked.push(url);
       const offset = Number(/offset=(\d+)/.exec(url)?.[1] ?? 0);
-      const releases = pages[offset / 100] ?? [];
-      return new Response(JSON.stringify({ releases, "release-count": pages.flat().length }), { status: 200 });
+      const groups = pages[offset / 100] ?? [];
+      return new Response(JSON.stringify({ "release-groups": groups, count: pages.flat().length }), { status: 200 });
     }) as typeof fetch;
 
-  it("keeps studio albums and drops live records, compilations and non-albums", async () => {
-    // The failure this guards: without the secondary-types check, browsing a
-    // well-documented artist returns mostly bootlegs and radio sessions —
-    // observed live as 25 rows containing zero studio albums.
-    const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      { id: "r1", title: "Studio One", date: "1997-05-21", "release-group": group("g1", "Album") },
-      { id: "r2", title: "Live At Wherever", date: "1998-01-01", "release-group": group("g2", "Album", ["Live"]) },
-      { id: "r3", title: "Greatest Hits", date: "1999-01-01", "release-group": group("g3", "Album", ["Compilation"]) },
-      { id: "r4", title: "A Single", date: "1996-01-01", "release-group": group("g4", "Single") },
-      { id: "r5", title: "Untyped", date: "1995-01-01", "release-group": group("g5") },
-    ]], asked)));
-
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums.map((a) => a.title)).toEqual(["Studio One"]);
-  });
-
-  it("prefers the pressing that uses the album's and artist's canonical names", async () => {
-    // The live failure: MusicBrainz's SOUR has 53 pressings, and we showed the
-    // Taiwanese one — track titles annotated in Han script, artist credited as
-    // 奧莉維亞. Nothing downstream can search for that.
-    const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      {
-        id: "taiwan", title: "SOUR", date: "2021",
-        "artist-credit": [{ name: "奧莉維亞", artist: { id: "a1", name: "Olivia Rodrigo" } }],
-        "release-group": { ...group("g1", "Album"), title: "SOUR" },
-      },
-      {
-        id: "japan", title: "サワー", date: "2021-06-02",
-        "artist-credit": [{ name: "オリヴィア・ロドリゴ", artist: { id: "a1", name: "Olivia Rodrigo" } }],
-        "release-group": { ...group("g1", "Album"), title: "SOUR" },
-      },
-      {
-        id: "worldwide", title: "SOUR", date: "2021-05-21",
-        "artist-credit": [{ name: "Olivia Rodrigo", artist: { id: "a1", name: "Olivia Rodrigo" } }],
-        "release-group": { ...group("g1", "Album"), title: "SOUR" },
-      },
-    ]], asked)));
-
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums).toHaveLength(1);
-    expect(albums[0]).toMatchObject({ id: "worldwide", title: "SOUR", artist: "Olivia Rodrigo" });
-  });
-
-  it("does not privilege Latin script: an artist with non-Latin names keeps their own", async () => {
-    // The rule is "agrees with its own group title and artist name", not "looks
-    // English" — so a Japanese artist's Japanese pressing is the canonical one.
-    const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      {
-        id: "export", title: "Solid State Survivor", date: "1979-09-25",
-        "artist-credit": [{ name: "Yellow Magic Orchestra", artist: { id: "a2", name: "イエロー・マジック・オーケストラ" } }],
-        "release-group": { ...group("g1", "Album"), title: "ソリッド・ステイト・サヴァイヴァー" },
-      },
-      {
-        id: "domestic", title: "ソリッド・ステイト・サヴァイヴァー", date: "1979-09-25",
-        "artist-credit": [{ name: "イエロー・マジック・オーケストラ", artist: { id: "a2", name: "イエロー・マジック・オーケストラ" } }],
-        "release-group": { ...group("g1", "Album"), title: "ソリッド・ステイト・サヴァイヴァー" },
-      },
-    ]], asked)));
-
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums[0]!.id).toBe("domestic");
-  });
-
-  it("treats a vague date as vague, not early", async () => {
-    // `"2021" < "2021-05-21"` as plain strings, which let a year-only pressing
-    // pose as the original. Precision is not evidence of age.
-    const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      { id: "year-only", title: "Album", date: "2021", "release-group": group("g1", "Album") },
-      { id: "exact", title: "Album", date: "2021-05-21", "release-group": group("g1", "Album") },
-    ]], asked)));
-
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums[0]!.id).toBe("exact");
-  });
-
-  it("collapses a release group to its earliest release", async () => {
-    // One album, four pressings — a discography must show it once, and the
-    // original rather than a reissue padded with bonus tracks.
-    const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      { id: "reissue", title: "Album (2015 Remaster)", date: "2015-01-01", "release-group": group("g1", "Album") },
-      { id: "original", title: "Album", date: "1997-05-21", "release-group": group("g1", "Album") },
-      { id: "vinyl", title: "Album (vinyl)", date: "1997-06-01", "release-group": group("g1", "Album") },
-      { id: "undated", title: "Album (unknown)", "release-group": group("g1", "Album") },
-    ]], asked)));
-
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums).toHaveLength(1);
-    expect(albums[0]!.id).toBe("original");
-  });
-
-  it("filters server-side so the page budget can cover a real discography", async () => {
+  it("asks for studio albums only, server-side", async () => {
+    // Browse cannot exclude secondary types, which is why this is a search:
+    // `type=album` still admits live records, compilations and bootlegs, and
+    // without this term Elvis Presley returns 1057 groups instead of 47.
     const asked: string[] = [];
     const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[]], asked)));
-    await api.browseArtistReleases(ARTIST, 25);
-    // Without these, a prolific artist's albums sit past the page cap: 1140
-    // releases vs 274 official album-type ones, measured against the live API.
-    expect(asked[0]).toContain("type=album");
-    expect(asked[0]).toContain("status=official");
+    await api.artistDiscography(ARTIST, 25);
+    const query = decodeURIComponent(asked[0]!);
+    expect(query).toContain(`arid:${ARTIST}`);
+    expect(query).toContain("primarytype:album");
+    expect(query).toContain("-secondarytype:*");
   });
 
-  it("pages until the artist's releases are exhausted", async () => {
+  it("returns one row per album, newest first, honouring the limit", async () => {
     const asked: string[] = [];
-    const full = Array.from({ length: 100 }, (_, i) => ({
-      id: `p1-${i}`, title: `Filler ${i}`, date: "1990-01-01", "release-group": group(`gf${i}`, "Single"),
-    }));
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([full, [
-      { id: "late", title: "Late Album", date: "2016-05-08", "release-group": group("g9", "Album") },
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      rg("g1", "Old", "1990-01-01", [{ id: "r1", status: "Official" }]),
+      rg("g2", "New", "2010-01-01", [{ id: "r2", status: "Official" }]),
+      rg("g3", "Mid", "2000-01-01", [{ id: "r3", status: "Official" }]),
     ]], asked)));
 
-    const albums = await api.browseArtistReleases(ARTIST, 25);
-    expect(albums.map((a) => a.title)).toEqual(["Late Album"]); // found on page 2
-    expect(asked).toHaveLength(2);
+    const albums = await api.artistDiscography(ARTIST, 2);
+    expect(albums.map((a) => a.title)).toEqual(["New", "Mid"]);
+    expect(albums[0]).toMatchObject({ id: "r2", releaseGroupId: "g2", artist: "Some Artist", date: "2010-01-01" });
+  });
+
+  it("represents an album with an official pressing under the album's own title", async () => {
+    // Search embeds only id/title/status per release — no date, no credit — so
+    // these two facts are the whole basis for the choice. Title equality both
+    // rejects bonus-track editions and keeps the canonical name.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      rg("g1", "Midnights", "2022-10-21", [
+        { id: "bootleg", title: "Midnights (The Full Moon edition)", status: "Bootleg" },
+        { id: "promo", title: "Midnights (McDonalds Deluxe)", status: "Promotion" },
+        { id: "deluxe", title: "Midnights (The Late Night Edition)", status: "Official" },
+        { id: "plain", title: "Midnights", status: "Official" },
+      ]),
+    ]], asked)));
+
+    const albums = await api.artistDiscography(ARTIST, 25);
+    expect(albums[0]!.id).toBe("plain");
+  });
+
+  it("falls back to any official pressing when none matches the album title", async () => {
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      rg("g1", "Album", "2000-01-01", [
+        { id: "bootleg", title: "Album (bootleg)", status: "Bootleg" },
+        { id: "reissue", title: "Album (2015 Remaster)", status: "Official" },
+      ]),
+    ]], asked)));
+    expect((await api.artistDiscography(ARTIST, 25))[0]!.id).toBe("reissue");
+  });
+
+  it("drops a group with no official release rather than pointing at a bootleg", async () => {
+    // Live examples: Taylor Swift's "The Vault (deluxe)" and "Lover The Secret
+    // Studio Sessions" are album-typed groups with nothing official behind them.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      rg("g1", "Real Album", "2000-01-01", [{ id: "r1", status: "Official" }]),
+      rg("g2", "The Vault (deluxe)", "2021-03-16", [{ id: "r2", status: "Bootleg" }]),
+      rg("g3", "No Releases At All", "1999-01-01", []),
+    ]], asked)));
+
+    expect((await api.artistDiscography(ARTIST, 25)).map((a) => a.title)).toEqual(["Real Album"]);
   });
 
   it("stops paging on a short page rather than spending the rate-limit budget", async () => {
     const asked: string[] = [];
     const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      { id: "r1", title: "Only", date: "2000-01-01", "release-group": group("g1", "Album") },
+      rg("g1", "Only", "2000-01-01", [{ id: "r1", status: "Official" }]),
     ]], asked)));
-    await api.browseArtistReleases(ARTIST, 25);
+    await api.artistDiscography(ARTIST, 25);
     expect(asked).toHaveLength(1);
   });
 
-  it("returns newest first and honours the limit", async () => {
+  it("pages when an artist has more albums than one page holds", async () => {
     const asked: string[] = [];
-    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
-      { id: "a", title: "Old", date: "1990-01-01", "release-group": group("g1", "Album") },
-      { id: "b", title: "New", date: "2010-01-01", "release-group": group("g2", "Album") },
-      { id: "c", title: "Mid", date: "2000-01-01", "release-group": group("g3", "Album") },
+    const full = Array.from({ length: 100 }, (_, i) =>
+      rg(`gf${i}`, `Filler ${i}`, "1990-01-01", [{ id: `rf${i}`, status: "Official" }]));
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([full, [
+      rg("g9", "Late Album", "2016-05-08", [{ id: "late", status: "Official" }]),
     ]], asked)));
 
-    const albums = await api.browseArtistReleases(ARTIST, 2);
-    expect(albums.map((a) => a.title)).toEqual(["New", "Mid"]);
+    const albums = await api.artistDiscography(ARTIST, 25);
+    expect(albums[0]!.title).toBe("Late Album"); // newest, found on page 2
+    expect(asked).toHaveLength(2);
   });
 });

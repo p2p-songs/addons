@@ -11,13 +11,14 @@ export { searchCatalog } from "./catalog.js";
 export type { CatalogDeps } from "./catalog.js";
 export { metaFor } from "./meta.js";
 export type { MetaDeps } from "./meta.js";
-export { releaseFrontCover } from "./coverart.js";
+export { releaseFrontCover, releaseGroupFrontCover } from "./coverart.js";
 // The MusicBrainz client now lives in the shared @p2p-songs/musicbrainz package.
 export { MusicBrainzApi } from "@p2p-songs/musicbrainz";
 export type {
   MusicBrainzClient,
   MbArtist,
   MbRelease,
+  MbAlbum,
   MbRecording,
   MbTrack,
   MbReleaseDetail,

@@ -8,6 +8,7 @@ export type {
   MusicBrainzApiOptions,
   MbArtist,
   MbRelease,
+  MbAlbum,
   MbRecording,
   MbTrack,
   MbReleaseDetail,

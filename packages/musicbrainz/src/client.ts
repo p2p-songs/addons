@@ -49,13 +49,27 @@ export interface MbTrack {
 export interface MbReleaseDetail extends MbRelease {
   tracks: MbTrack[];
 }
+/**
+ * One album in an artist's discography: a release *group*, plus the one
+ * pressing we picked to stand for it.
+ */
+export interface MbAlbum {
+  /** The representative release — the album's identity in our id namespace. */
+  id: string;
+  /** The release group. Cover art is far better covered per group than per pressing. */
+  releaseGroupId: string;
+  title: string;
+  artist: string;
+  /** The group's first release date — the album's date, not this pressing's. */
+  date?: string;
+}
 
 export interface MusicBrainzClient {
   searchArtists(query: string, limit: number, signal?: AbortSignal): Promise<MbArtist[]>;
   searchReleases(query: string, limit: number, signal?: AbortSignal): Promise<MbRelease[]>;
   searchRecordings(query: string, limit: number, signal?: AbortSignal): Promise<MbRecording[]>;
-  /** An artist's discography — one release per release group (see the implementation). */
-  browseArtistReleases(artistUuid: string, limit: number, signal?: AbortSignal): Promise<MbRelease[]>;
+  /** An artist's studio albums, newest first (see the implementation). */
+  artistDiscography(artistUuid: string, limit: number, signal?: AbortSignal): Promise<MbAlbum[]>;
   getArtist(uuid: string, signal?: AbortSignal): Promise<MbArtist | undefined>;
   getRelease(uuid: string, signal?: AbortSignal): Promise<MbReleaseDetail | undefined>;
   getRecording(uuid: string, signal?: AbortSignal): Promise<MbRecording | undefined>;
@@ -147,54 +161,63 @@ export class MusicBrainzApi implements MusicBrainzClient {
   }
 
   /**
-   * An artist's discography: their **studio albums**, one release per album.
+   * An artist's discography: their **studio albums**, newest first.
    *
-   * Three MusicBrainz facts shape this, and getting any of them wrong produces a
-   * list that looks plausible and is useless:
+   * This asks for release *groups* — the album — rather than releases, and it
+   * uses `search` rather than `browse`, both for the same reason: cost. Three
+   * measurements against the live API decided it:
    *
-   * 1. A "release group" is the album; a "release" is one pressing of it. A
-   *    popular album easily has 30+ (CD, vinyl, per-country, reissues) — SOUR
-   *    has 53 — so an unfiltered release list buries ten albums under hundreds
-   *    of duplicates. {@link betterRepresentative} picks the one to keep:
-   *    canonically named first, then earliest — the original pressing, and the
-   *    one least likely to carry bonus-track padding.
-   * 2. Release groups are typed. Without filtering on that, a well-documented
-   *    artist returns mostly **bootlegs, radio sessions and singles**: browsing
-   *    Radiohead this way produced 25 rows of which zero were studio albums.
-   *    So: `primary-type` must be Album, and any `secondary-types` (Live,
-   *    Compilation, Remix, DJ-mix, Bootleg…) disqualifies it.
-   * 3. Browse caps at 100 per page and returns them in no useful order, so the
-   *    first page of a prolific artist can contain no albums at all. We page —
-   *    bounded, because every page costs a second of the ≤1 req/sec budget.
+   * 1. **Browsing releases cannot be bounded.** An album has one release group
+   *    but dozens of pressings, so a discography browsed as releases is mostly
+   *    duplicates: Taylor Swift has 981 official album releases across 10 pages
+   *    of 100. Worse, they come back in date order, so the newest albums are on
+   *    the *last* page — a 3-page cap returned 6 of her 18 albums and silently
+   *    hid everything after 2017. Nothing short of paging all 10 fixes that,
+   *    and Elvis Presley and Miles Davis need 16.
+   * 2. **Browse cannot filter secondary types, and search can.** `type=album`
+   *    still admits live records, compilations and bootlegs — that is how
+   *    browsing Radiohead produced 25 rows with zero studio albums — and there
+   *    is no browse parameter to exclude them, which leaves Elvis at 1057 album
+   *    groups. The Lucene term `-secondarytype:*` does it server-side, and the
+   *    same three artists collapse to **18, 47 and 10 groups: one page each**.
+   * 3. **Release-group search results embed their releases**, so the one
+   *    request also yields the release id we need for the album's identity.
+   *    (`inc=releases` is rejected on release-group *browse* — 400 — which is
+   *    the other half of why this is a search.)
+   *
+   * So: one request per artist, complete, and no arbitrary cutoff.
    */
-  async browseArtistReleases(artistUuid: string, limit: number, signal?: AbortSignal): Promise<MbRelease[]> {
-    const byGroup = new Map<string, RawRelease>();
+  async artistDiscography(artistUuid: string, limit: number, signal?: AbortSignal): Promise<MbAlbum[]> {
+    const query = `arid:${artistUuid} AND primarytype:album AND -secondarytype:*`;
+    const albums: MbAlbum[] = [];
     for (let page = 0; page < MAX_DISCOGRAPHY_PAGES; page++) {
-      const body = await this.get<{ releases?: RawRelease[]; "release-count"?: number }>(
-        // `type`/`status` filter server-side, which is what makes the page cap
-        // viable: Radiohead has 1140 releases but only 274 official album-type
-        // ones, so the whole discography now fits inside the budget instead of
-        // being an arbitrary slice. The secondary-types check below still runs —
-        // `type=album` admits live albums and compilations.
-        `/release?artist=${encodeURIComponent(artistUuid)}&type=album&status=official` +
-          `&inc=release-groups+artist-credits&fmt=json&limit=${BROWSE_PAGE_SIZE}&offset=${page * BROWSE_PAGE_SIZE}`,
+      const body = await this.get<{ "release-groups"?: RawSearchReleaseGroup[]; count?: number }>(
+        `/release-group?query=${encodeURIComponent(query)}&fmt=json` +
+          `&limit=${SEARCH_MAX_LIMIT}&offset=${page * SEARCH_MAX_LIMIT}`,
         signal,
       );
-      const releases = body?.releases ?? [];
-      for (const r of releases) {
-        const group = r["release-group"];
-        if (!isStudioAlbum(group)) continue;
-        const groupId = group?.id ?? r.id;
-        const seen = byGroup.get(groupId);
-        if (!seen || betterRepresentative(r, seen)) byGroup.set(groupId, r);
+      const groups = body?.["release-groups"] ?? [];
+      for (const group of groups) {
+        const release = representativeRelease(group);
+        // No official release means nothing playable to point an id at — this
+        // is what drops the bootleg-only groups ("The Vault (deluxe)").
+        if (!release) continue;
+        const album: MbAlbum = {
+          id: release,
+          releaseGroupId: group.id,
+          title: group.title,
+          artist: creditToName(group["artist-credit"]),
+        };
+        const date = group["first-release-date"];
+        if (date) album.date = date;
+        albums.push(album);
       }
-      const total = body?.["release-count"];
-      if (releases.length < BROWSE_PAGE_SIZE || (total !== undefined && (page + 1) * BROWSE_PAGE_SIZE >= total)) break;
+      const total = body?.count;
+      if (groups.length < SEARCH_MAX_LIMIT || (total !== undefined && (page + 1) * SEARCH_MAX_LIMIT >= total)) break;
     }
-    return [...byGroup.values()]
+    return albums
       .sort((a, b) => dateKey(b.date).localeCompare(dateKey(a.date))) // newest album first
-      .slice(0, limit)
-      .map(toRelease);
+      .slice(0, limit);
   }
 
   async searchRecordings(query: string, limit: number, signal?: AbortSignal): Promise<MbRecording[]> {
@@ -273,6 +296,16 @@ interface RawRelease {
   "release-group"?: RawReleaseGroup;
   media?: { position?: number; tracks?: RawTrack[] }[];
 }
+/** A release-group *search* hit, which — unlike a browse — embeds its releases. */
+interface RawSearchReleaseGroup {
+  id: string;
+  title: string;
+  "first-release-date"?: string;
+  "artist-credit"?: RawArtistCredit[];
+  /** Only `id`/`title`/`status` are populated here; no date, no credit. */
+  releases?: { id: string; title: string; status?: string }[];
+}
+
 interface RawReleaseGroup {
   id: string;
   /** The album's canonical title, as opposed to this pressing's. */
@@ -281,6 +314,31 @@ interface RawReleaseGroup {
   "primary-type"?: string;
   /** "Live" | "Compilation" | "Remix" | "DJ-mix" | "Bootleg" | … — any of these disqualifies. */
   "secondary-types"?: string[];
+}
+
+/**
+ * The pressing that stands for an album in a discography.
+ *
+ * Release-group search embeds each group's releases, but only their `id`,
+ * `title` and `status` — no date and no artist credit, so the full
+ * {@link betterRepresentative} comparison can't run here. What survives is the
+ * part that matters: **Official** (so a bootleg or a promo never represents the
+ * album) and a title equal to the group's, which is both the canonical-naming
+ * test and what excludes deluxe/anniversary pressings padded with bonus tracks.
+ *
+ * Measured across 17 albums from three artists, this picked a canonically named
+ * and credited pressing every time. It is a weaker guarantee than
+ * `betterRepresentative` gets from full release data, and the residual risk is
+ * a pressing that keeps the album's exact title while re-crediting the artist
+ * in another script — invisible from here. If that ever shows up, the fix is a
+ * corrective lookup in {@link MusicBrainzApi.getRelease}, not more guessing at
+ * this level.
+ */
+function representativeRelease(group: RawSearchReleaseGroup): string | undefined {
+  const official = (group.releases ?? []).filter((r) => r.status === "Official");
+  if (official.length === 0) return undefined;
+  const exact = official.find((r) => normalizeName(r.title) === normalizeName(group.title));
+  return (exact ?? official[0])!.id;
 }
 
 /**
@@ -348,8 +406,6 @@ function dateKey(date: string | undefined): string {
   return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
-/** MusicBrainz browse caps a page at 100. */
-const BROWSE_PAGE_SIZE = 100;
 /**
  * Headroom for collapsing search results to one release per album. Dozens of
  * pressings share an album, so asking for exactly `limit` releases would return
@@ -359,23 +415,14 @@ const SEARCH_OVERFETCH = 4;
 /** MusicBrainz caps a search page at 100. */
 const SEARCH_MAX_LIMIT = 100;
 /**
- * Pages to scan for a discography. Each costs ~1s of the rate-limit budget, so
- * this trades completeness for a page that actually loads: 300 releases covers
- * all but the most prolific artists' studio output.
+ * Pages of release-group search results to scan for a discography. One page is
+ * 100 albums, which covered every artist measured — the most prolific, Elvis
+ * Presley, has 47 studio albums. The second page exists so a pathological
+ * discography degrades by truncation rather than by silently paging forever;
+ * each costs a second of the =<1 req/sec budget.
  */
-const MAX_DISCOGRAPHY_PAGES = 3;
+const MAX_DISCOGRAPHY_PAGES = 2;
 
-/**
- * A studio album, as opposed to a live record, compilation, single, EP or
- * bootleg. `secondary-types` is the discriminator that matters — a release
- * group can be `primary-type: "Album"` *and* `secondary-types: ["Live"]`, which
- * is how concert bootlegs end up looking like albums.
- */
-function isStudioAlbum(group: RawReleaseGroup | undefined): boolean {
-  if (!group) return false;
-  if (group["primary-type"] !== "Album") return false;
-  return (group["secondary-types"] ?? []).length === 0;
-}
 interface RawTrack {
   id: string;
   number?: string;

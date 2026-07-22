@@ -2,6 +2,7 @@ import type {
   MusicBrainzClient,
   MbArtist,
   MbRelease,
+  MbAlbum,
   MbRecording,
   MbReleaseDetail,
 } from "@p2p-songs/musicbrainz";
@@ -16,7 +17,7 @@ export class FakeMusicBrainz implements MusicBrainzClient {
       releaseDetail?: Record<string, MbReleaseDetail>;
       artist?: Record<string, MbArtist>;
       recording?: Record<string, MbRecording>;
-      artistReleases?: MbRelease[];
+      discography?: MbAlbum[];
     } = {},
   ) {}
 
@@ -29,8 +30,8 @@ export class FakeMusicBrainz implements MusicBrainzClient {
   async searchRecordings(): Promise<MbRecording[]> {
     return this.data.recordings ?? [];
   }
-  async browseArtistReleases(): Promise<MbRelease[]> {
-    return this.data.artistReleases ?? [];
+  async artistDiscography(): Promise<MbAlbum[]> {
+    return this.data.discography ?? [];
   }
   async getArtist(uuid: string): Promise<MbArtist | undefined> {
     return this.data.artist?.[uuid];

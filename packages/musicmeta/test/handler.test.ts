@@ -63,9 +63,9 @@ describe("musicmeta over the SDK router", () => {
 describe("discography catalog", () => {
   const UU = { artist: "11111111-1111-1111-1111-111111111111", rel1: "22222222-2222-2222-2222-222222222222", rel2: "33333333-3333-3333-3333-333333333333" };
   const mb = new FakeMusicBrainz({
-    artistReleases: [
-      { id: UU.rel1, title: "Selected Ambient Works 85\u201392", artist: "Aphex Twin", date: "1992-11-09" },
-      { id: UU.rel2, title: "Drukqs", artist: "Aphex Twin", date: "2001-10-22" },
+    discography: [
+      { id: UU.rel1, releaseGroupId: "aaaaaaaa-0000-0000-0000-000000000001", title: "Selected Ambient Works 85\u201392", artist: "Aphex Twin", date: "1992-11-09" },
+      { id: UU.rel2, releaseGroupId: "aaaaaaaa-0000-0000-0000-000000000002", title: "Drukqs", artist: "Aphex Twin", date: "2001-10-22" },
     ],
   });
   const route = createRouter(createMusicMetaAddon({ mb }));
