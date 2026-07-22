@@ -12,6 +12,7 @@ import { manifest } from "./manifest.js";
 import { parseConfig, redactConfig, type BitbopConfig } from "./config.js";
 import { MusicBrainzLookup, type MetadataLookup } from "./metadata.js";
 import { TorznabIndexer } from "./indexers/torznab.js";
+import { SearchCache, withSearchCache } from "./indexers/cache.js";
 import type { Indexer } from "./indexers/types.js";
 import { createProvider } from "./debrid/index.js";
 import { createGuardedFetch } from "./net/guarded-fetch.js";
@@ -39,11 +40,20 @@ export interface BitbopDeps {
   buildIndexers?: (config: BitbopConfig) => Indexer[];
   /** Override the resolve deps entirely (tests). */
   buildResolveDeps?: (config: BitbopConfig) => ResolveDeps | undefined;
+  /**
+   * Search cache shared across requests. Supply one to tune or inspect it;
+   * omit for the default. Passing a fresh cache per call would defeat it — the
+   * whole point is reuse *between* the `/stream` requests of one album.
+   */
+  searchCache?: SearchCache;
   /** Redacted diagnostics sink (never receives raw credentials). */
   onError?: (info: { message: string; config: Record<string, unknown> }) => void;
 }
 
 export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
+  // Addon-scoped, not request-scoped: a 12-track album is 12 `/stream` requests
+  // issuing the same album search, and this is what collapses them into one.
+  const searchCache = deps.searchCache ?? new SearchCache();
   // Indexer destinations are caller-supplied, so the default transport is the
   // guarded one (A-011). The debrid provider talks to a fixed, first-party API
   // host, so it keeps the plain global `fetch`.
@@ -55,9 +65,10 @@ export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
     ((config: BitbopConfig): ResolveDeps | undefined => {
       const provider = createProvider(config.debrid.provider, { ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}) });
       if (!provider) return undefined; // configured provider has no adapter yet
-      const indexers = deps.buildIndexers
+      const built = deps.buildIndexers
         ? deps.buildIndexers(config)
         : config.indexers.map((ix) => new TorznabIndexer(ix, { fetchImpl: indexerFetch }));
+      const indexers = built.map((ix) => withSearchCache(ix, searchCache));
       const metadata = deps.metadata ?? new MusicBrainzLookup(deps.musicbrainz);
       return { metadata, indexers, provider };
     });

@@ -174,7 +174,7 @@ async function resolveCandidate(
   if (!cache.cached) return undefined;
   if (!cache.files || cache.files.length === 0) return undefined;
 
-  const match = pickFile(cache.files, track);
+  const match = pickFile(cache.files, track, config.preferFormats);
   if (!match) return undefined;
 
   // Carry the handle forward so unrestricting doesn't re-add what we just added.

@@ -69,7 +69,7 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   addon here. `mbid:recording:` (+ optional album context) → MusicBrainz →
   fan-out to the **user's own** Torznab indexers → rank candidates → per torrent:
   debrid **cache check** → **`pickFile`** → **unrestrict** → resolved https
-  stream. 140 tests, none needing network or a debrid account.
+  stream. 157 tests, none needing network or a debrid account.
   **Invariants (don't regress):** the debrid key is a *required* config field
   read only from that request's `/configure` (no env var, no default, no pooled
   account) and `configurationRequired: true` makes the router **fail closed**;
@@ -81,7 +81,22 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   **`pickFile` is the correctness-critical part (Plan §2a):** deterministic by
   disc+track position with album context, fuzzy title otherwise, and it will
   return *nothing* rather than a probably-wrong track. "Largest file" is never
-  used.
+  used. **It also takes `preferFormats`** — music torrents routinely ship the
+  same album as FLAC *and* MP3 *and* WAV, so every encoding matches "track 3"
+  equally well and the tie must be broken here. This can't be deferred to stream
+  ranking, which only ever sees one already-chosen file per torrent. Falling back
+  to "largest" is actively wrong: WAV is uncompressed, so it beat the FLAC every
+  time (the bug this fixed). Title agreement still dominates — a better-matching
+  MP3 beats a FLAC of the wrong song.
+  **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
+  album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
+  12 sent byte-identical queries. `withSearchCache` collapses them into one, with
+  **single-flight** (the player prefetches, so overlapping requests are normal),
+  **shorter TTL for empty results**, and **failures never cached** (the resolver's
+  outage-vs-no-match distinction needs to see them). The cache is **addon-scoped,
+  not per-request** — building it per call defeats the entire purpose. In-memory
+  and bounded on purpose: Comet uses a 30-day database, but Bitbop is stateless
+  (Plan §2), and candidate metadata is the only thing §3 permits caching anyway.
   **A-011 (don't regress):** the indexer URL is caller-supplied and fetched
   server-side, so `src/net/` guards it — https-only in public mode, **every
   redirect hop re-validated**, and the **validated address is the connected

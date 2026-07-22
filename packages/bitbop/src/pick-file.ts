@@ -21,10 +21,19 @@
  * Non-audio entries (art, logs, cue sheets, nfo) are filtered before either
  * strategy runs. Pure and heavily tested — this is the correctness-critical
  * heart of the addon.
+ *
+ * **Format preference is part of picking the right file, not a later ranking
+ * step.** Music torrents routinely ship the same album several times over —
+ * FLAC *and* MP3 *and* WAV of every track. Those files are all equally good
+ * matches for "track 3", so whichever strategy runs has to break the tie with
+ * the user's `preferFormats`. It cannot be deferred to stream ranking, which
+ * only ever sees one already-chosen file per torrent. Note that falling back to
+ * "largest" here is actively wrong: WAV is uncompressed, so it beats the FLAC
+ * every time.
  */
 import type { DebridFile } from "./debrid/types.js";
 import type { TrackContext } from "./metadata.js";
-import { isAudioFile, extensionOf } from "./format.js";
+import { isAudioFile, extensionOf, formatOfFile, formatPreferenceRank } from "./format.js";
 
 export interface FileMatch {
   file: DebridFile;
@@ -41,18 +50,35 @@ export const FUZZY_THRESHOLD = 0.45;
  * Pick the file for `track` from a torrent's `files`, or `undefined` if no file
  * is a confident match.
  */
-export function pickFile(files: DebridFile[], track: TrackContext): FileMatch | undefined {
+export function pickFile(
+  files: DebridFile[],
+  track: TrackContext,
+  /** The user's `preferFormats`, used to break ties between encodings of the same track. */
+  preferFormats: readonly string[] = [],
+): FileMatch | undefined {
   const audio = files.filter((f) => isAudioFile(f.path));
   if (audio.length === 0) return undefined;
 
   if (track.hasAlbumContext && track.position !== undefined) {
-    const exact = byDiscPosition(audio, track);
+    const exact = byDiscPosition(audio, track, preferFormats);
     if (exact) return { file: exact, strategy: "disc-position", confidence: 0.95 };
     // Album context but the filenames don't expose track numbers — fall back to
     // fuzzy rather than guess a position.
   }
 
-  return byFuzzyTitle(audio, track);
+  return byFuzzyTitle(audio, track, preferFormats);
+}
+
+/**
+ * Order two equally-good candidates: preferred format first, then larger file.
+ * Size is only ever a last resort — within one format it's a decent proxy for
+ * bitrate, but across formats it just favours whatever is least compressed.
+ */
+function preferBetter(a: DebridFile, b: DebridFile, preferFormats: readonly string[]): number {
+  const rank =
+    formatPreferenceRank(formatOfFile(b.path), preferFormats) -
+    formatPreferenceRank(formatOfFile(a.path), preferFormats);
+  return rank !== 0 ? rank : (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0);
 }
 
 // --- strategy 1: disc + position ---
@@ -63,7 +89,11 @@ function targetNumber(position: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-function byDiscPosition(audio: DebridFile[], track: TrackContext): DebridFile | undefined {
+function byDiscPosition(
+  audio: DebridFile[],
+  track: TrackContext,
+  preferFormats: readonly string[],
+): DebridFile | undefined {
   const wantTrack = targetNumber(track.position!);
   if (wantTrack === undefined) return undefined;
   const wantDisc = track.disc;
@@ -79,12 +109,13 @@ function byDiscPosition(audio: DebridFile[], track: TrackContext): DebridFile | 
   });
 
   if (matches.length === 1) return matches[0];
-  // Multiple files claim the same track number (e.g. a bonus/alt take). Prefer
-  // the one whose folder names the right disc, else the largest (likely lossless).
+  // Multiple files claim the same track number — usually the same track in
+  // several encodings, sometimes a bonus/alt take. Prefer the one whose folder
+  // names the right disc, then the user's preferred format.
   if (matches.length > 1) {
     const byDisc = matches.filter((f) => folderNamesDisc(f.path, wantDisc));
     const pool = byDisc.length > 0 ? byDisc : matches;
-    return [...pool].sort((a, b) => (b.sizeBytes ?? 0) - (a.sizeBytes ?? 0))[0];
+    return [...pool].sort((a, b) => preferBetter(a, b, preferFormats))[0];
   }
   return undefined;
 }
@@ -138,10 +169,17 @@ function folderNamesDisc(path: string, disc: number | undefined): boolean {
 
 // --- strategy 2: fuzzy title ---
 
-function byFuzzyTitle(audio: DebridFile[], track: TrackContext): FileMatch | undefined {
+function byFuzzyTitle(
+  audio: DebridFile[],
+  track: TrackContext,
+  preferFormats: readonly string[],
+): FileMatch | undefined {
   const scored = audio
     .map((file) => ({ file, score: fuzzyScore(basename(file.path), track.title) }))
-    .sort((a, b) => b.score - a.score);
+    // Title agreement dominates: a better-matching MP3 still beats a FLAC of the
+    // wrong song. Format only decides between files that match equally well —
+    // which, for an album shipped in several encodings, is every one of them.
+    .sort((a, b) => b.score - a.score || preferBetter(a.file, b.file, preferFormats));
   const best = scored[0];
   if (!best || best.score < FUZZY_THRESHOLD) return undefined;
   return { file: best.file, strategy: "fuzzy", confidence: Math.min(0.9, best.score) };

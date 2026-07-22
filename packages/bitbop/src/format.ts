@@ -50,3 +50,27 @@ export function isAudioFile(path: string): boolean {
   const ext = extensionOf(path);
   return ext !== undefined && AUDIO_EXTENSIONS.has(ext);
 }
+
+/**
+ * The format of an audio *file*, from its extension alone.
+ *
+ * Deliberately narrower than {@link detectFormat}: that one falls back to
+ * scanning for a format word anywhere in the text, which is right for a release
+ * *title* but wrong for a path — a file inside a folder named `Album [FLAC]`
+ * would report FLAC whatever it actually is.
+ */
+export function formatOfFile(path: string): AudioFormat | undefined {
+  const ext = extensionOf(path);
+  return ext ? EXT_TO_FORMAT[ext] : undefined;
+}
+
+/**
+ * Rank a format against the user's `preferFormats`, higher being better.
+ * Unlisted formats rank below every listed one but are never excluded, and an
+ * unrecognized file ranks below those — same semantics the stream ranking uses.
+ */
+export function formatPreferenceRank(format: AudioFormat | undefined, preferFormats: readonly string[]): number {
+  if (!format) return -1;
+  const idx = preferFormats.findIndex((f) => f.toUpperCase() === format.toUpperCase());
+  return idx < 0 ? 0 : preferFormats.length - idx;
+}

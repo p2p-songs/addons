@@ -141,3 +141,72 @@ describe("fuzzyScore", () => {
     expect(fuzzyScore("Aerodynamic", "Digital Love")).toBeLessThan(FUZZY_THRESHOLD);
   });
 });
+
+/**
+ * A multi-format release: the same nine tracks shipped as FLAC, MP3, OGG and
+ * WAV alongside artwork. This is not a contrived case — it is the exact shape of
+ * the Internet Archive Live Music Archive item we probed, and it is common for
+ * lossless music torrents generally. Every encoding matches "track 1" equally
+ * well, so the tie has to be broken by the user's `preferFormats`.
+ */
+const multiFormatFiles: DebridFile[] = [
+  f("1", "Jeremiah Hazed 2019-05-24/01 Two Bottles.flac", 180_000_000),
+  f("2", "Jeremiah Hazed 2019-05-24/01 Two Bottles.mp3", 12_000_000),
+  f("3", "Jeremiah Hazed 2019-05-24/01 Two Bottles.ogg", 10_000_000),
+  f("4", "Jeremiah Hazed 2019-05-24/01 Two Bottles.wav", 520_000_000),
+  f("5", "Jeremiah Hazed 2019-05-24/02 Song For You and Me.flac", 190_000_000),
+  f("6", "Jeremiah Hazed 2019-05-24/02 Song For You and Me.wav", 540_000_000),
+  f("7", "Jeremiah Hazed 2019-05-24/folder.png", 800_000),
+];
+
+describe("pickFile — several encodings of the same track", () => {
+  const track = (over: Partial<TrackContext> = {}): TrackContext => ({
+    artist: "Jeremiah Hazed",
+    title: "Two Bottles",
+    hasAlbumContext: true,
+    position: "1",
+    disc: 1,
+    ...over,
+  });
+
+  it("honours preferFormats by disc+position", () => {
+    const match = pickFile(multiFormatFiles, track(), ["FLAC", "MP3"]);
+    expect(match?.file.path.endsWith(".flac")).toBe(true);
+  });
+
+  it("honours preferFormats by fuzzy title too", () => {
+    const match = pickFile(multiFormatFiles, track({ hasAlbumContext: false, position: undefined }), ["FLAC", "MP3"]);
+    expect(match?.file.path.endsWith(".flac")).toBe(true);
+  });
+
+  it("follows the user's order rather than a built-in quality ranking", () => {
+    // Someone on metered storage genuinely wants the MP3; we are not the judge.
+    const match = pickFile(multiFormatFiles, track(), ["MP3", "FLAC"]);
+    expect(match?.file.path.endsWith(".mp3")).toBe(true);
+  });
+
+  it("never falls back to 'largest', which would always pick the WAV", () => {
+    // The regression this guards: size was the tie-break, and WAV is
+    // uncompressed, so it beat the FLAC every single time.
+    for (const prefs of [["FLAC", "MP3"], ["MP3"], ["OGG"]]) {
+      const match = pickFile(multiFormatFiles, track(), prefs);
+      expect(match?.file.path.endsWith(".wav")).toBe(false);
+    }
+  });
+
+  it("still returns something when no preferred format is present", () => {
+    // Unlisted formats rank below listed ones but are never excluded.
+    const match = pickFile(multiFormatFiles, track(), ["ALAC"]);
+    expect(match).toBeDefined();
+    expect(match?.file.path).toContain("Two Bottles");
+  });
+
+  it("prefers a better title match over a preferred format", () => {
+    const files: DebridFile[] = [
+      f("1", "Album/03 Digital Love.mp3", 8_000_000),
+      f("2", "Album/04 Something Else.flac", 40_000_000),
+    ];
+    const match = pickFile(files, { artist: "Daft Punk", title: "Digital Love", hasAlbumContext: false }, ["FLAC"]);
+    expect(match?.file.path).toContain("Digital Love");
+  });
+});

@@ -137,7 +137,7 @@ a hash the account already holds returns a **new** torrent id, so Real-Debrid do
 
 ## Tests
 
-`pnpm test` — 140 tests, no network or debrid account required (indexers, the
+`pnpm test` — 157 tests, no network or debrid account required (indexers, the
 debrid provider, and metadata are all injected behind interfaces and driven with
 fakes). The correctness-critical file-selection logic is the most heavily
 covered, followed by the address policy (every deny range asserted individually,
