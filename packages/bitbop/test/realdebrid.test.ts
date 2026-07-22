@@ -96,12 +96,23 @@ function fakeRd(opts: FakeOptions = {}) {
   return { impl, calls, torrents };
 }
 
-const providerOf = (fake: ReturnType<typeof fakeRd>, over: Partial<{ settleBudgetMs: number }> = {}) =>
-  new RealDebridProvider({
+/**
+ * A fake clock driven by `sleep`, so the provider's wall-clock deadline is
+ * exercised deterministically and no test spends real time. Each poll also
+ * charges a round-trip, because on the live API that is where the budget
+ * actually goes (~260ms per call, measured).
+ */
+const providerOf = (fake: ReturnType<typeof fakeRd>, over: Partial<{ settleBudgetMs: number }> = {}) => {
+  let clock = 0;
+  return new RealDebridProvider({
     fetchImpl: fake.impl as unknown as typeof fetch,
-    sleep: async () => {}, // never spend real time polling
-    settleBudgetMs: over.settleBudgetMs ?? 2_500,
+    sleep: async (ms) => {
+      clock += ms + 260;
+    },
+    now: () => clock,
+    settleBudgetMs: over.settleBudgetMs ?? 3_000,
   });
+};
 
 describe("RealDebridProvider.checkCache", () => {
   it("selects only audio files, never the whole torrent", async () => {
@@ -160,6 +171,26 @@ describe("RealDebridProvider.checkCache", () => {
     // A zero budget means the in-progress poll loop cannot run at all.
     const result = await providerOf(fake, { settleBudgetMs: 0 }).checkCache({ infoHash: HASH }, "RDKEY");
     expect(result.cached).toBe(false);
+  });
+
+  it("bounds the whole check by wall clock, counting round-trips not just sleeps", async () => {
+    // The live API answers a *cached* torrent in ~1330ms, and each poll costs
+    // ~260ms of network. Counting attempts instead of elapsed time made a
+    // nominal 2.5s budget run 4.8s — long after a cached torrent had answered.
+    const fake = fakeRd({ settledStatus: "downloading" });
+    let clock = 0;
+    const provider = new RealDebridProvider({
+      fetchImpl: fake.impl as unknown as typeof fetch,
+      sleep: async (ms) => {
+        clock += ms + 260;
+      },
+      now: () => clock,
+      settleBudgetMs: 3_000,
+    });
+
+    const result = await provider.checkCache({ infoHash: HASH }, "RDKEY");
+    expect(result.cached).toBe(false);
+    expect(clock).toBeLessThanOrEqual(3_000 + 660); // at most one poll overruns the deadline
   });
 
   it("adds nothing when given a handle for a torrent already on the account", async () => {

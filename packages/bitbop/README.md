@@ -129,6 +129,12 @@ hashes are cached is a coordinated availability index, which is exactly the line
 [Legal posture](#legal-posture-plan-3--non-negotiable) draws. The honest cost:
 the first query for a torrent nobody has fetched yet is always a real round-trip.
 
+The timings above aren't guesses — they were measured against a live Real-Debrid
+account. A cached torrent settles in **~1330 ms** and API round-trips run
+**~260 ms**, which is where the 3-second wall-clock budget comes from. Re-adding
+a hash the account already holds returns a **new** torrent id, so Real-Debrid does
+*not* deduplicate — that single fact is why the pre-pass exists.
+
 ## Tests
 
 `pnpm test` — 140 tests, no network or debrid account required (indexers, the

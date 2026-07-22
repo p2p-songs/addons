@@ -109,6 +109,17 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   same auth path as HTTP 401/403. We deliberately do **not** join the ecosystem's
   shared cache network (StremThru's Buddy/Peer): publishing which hashes are
   cached is a coordinated availability index, which Plan §3 rules out.
+  **Measured against a live account (2026-07-21), not guessed:** `addMagnet`
+  **does not dedupe** — re-adding a hash the account already holds returns a
+  *new* torrent id, which is what makes the `listCached` pre-pass load-bearing
+  rather than an optimization. A **cached** torrent settles in **~1330ms**
+  (add 250 → `waiting_files_selection` 636 → select 895 → `downloaded` 1330) and
+  RD round-trips run **~260ms p50**, so `CACHE_SETTLE_BUDGET_MS` is 3000ms of
+  **wall clock** — bounding poll *attempts* instead made a nominal 2.5s budget
+  take 4.8s, because it ignored the round-trip each attempt costs. `GET /torrents`
+  returns `hash` as 40-char hex alongside `id`/`status`, as `listCached` assumes.
+  Verified live: an uncached torrent is added, selected, refused, and **deleted**,
+  leaving the account's torrent count unchanged.
 
 - **`stream-legal`** (#3) — zero-config stream addon: `mbid:recording:<uuid>` →
   MusicBrainz metadata lookup → **fixed source allowlist** (Internet Archive

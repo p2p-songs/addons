@@ -58,14 +58,20 @@ const STATUS_IN_PROGRESS = new Set(["queued", "downloading", "compressing", "upl
 const STATUS_TERMINAL_ERROR = new Set(["magnet_error", "error", "virus", "dead"]);
 
 /**
- * How long to give a freshly-selected torrent to report `downloaded`.
+ * Wall-clock budget for driving a freshly-added torrent to a verdict.
  *
- * A *cached* torrent flips almost immediately — RD is only copying references.
- * Anything still going after this is downloading for real, which we will never
- * wait for, so the budget is short on purpose: it bounds the request, and every
- * millisecond past the flip is dead time in a player's resolve path.
+ * Calibrated against the live API rather than guessed. Measured on a cached
+ * torrent: `addMagnet` → 250ms, `waiting_files_selection` → 636ms, selection
+ * call → 895ms, `downloaded` → **1330ms**; RD round-trips run ~260ms (p50).
+ * 3s is a little over 2× the observed flip — enough headroom for a slower link
+ * or an album with many files, without waiting on anything real.
+ *
+ * This is a **wall-clock** bound, deliberately. An earlier version counted poll
+ * *attempts*, which ignored the ~260ms round-trip each attempt costs and made a
+ * nominal "2.5s" budget take 4.8s in practice — most of it spent after the point
+ * where a cached torrent would already have answered.
  */
-const CACHE_SETTLE_BUDGET_MS = 2_500;
+const CACHE_SETTLE_BUDGET_MS = 3_000;
 const CACHE_POLL_INTERVAL_MS = 400;
 
 /** Pages of `GET /torrents` to scan in {@link listCached}. RD returns newest-first. */
@@ -97,7 +103,9 @@ export interface RealDebridOptions {
   baseUrl?: string;
   /** Injected for tests, so polling doesn't spend real time. */
   sleep?: (ms: number) => Promise<void>;
-  /** Total time a freshly-selected torrent gets to report `downloaded`. */
+  /** Injected alongside `sleep` so the wall-clock bound is deterministic in tests. */
+  now?: () => number;
+  /** Wall-clock budget for a freshly-added torrent to report `downloaded`. */
   settleBudgetMs?: number;
 }
 
@@ -106,12 +114,14 @@ export class RealDebridProvider implements DebridProvider {
   private readonly fetchImpl: typeof fetch;
   private readonly base: string;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
   private readonly settleBudgetMs: number;
 
   constructor(options: RealDebridOptions = {}) {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.base = options.baseUrl ?? RD_BASE;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = options.now ?? Date.now;
     this.settleBudgetMs = options.settleBudgetMs ?? CACHE_SETTLE_BUDGET_MS;
   }
 
@@ -205,17 +215,15 @@ export class RealDebridProvider implements DebridProvider {
    * whether that means "cached" and owns the cleanup.
    */
   private async selectAudioAndSettle(id: string, apiKey: string, signal?: AbortSignal): Promise<RdInfo> {
-    // One poll budget shared by both phases below, so the total work is bounded
-    // wherever the time goes. Counting attempts rather than watching the clock
-    // keeps this deterministic under an injected `sleep`.
-    const maxPolls = Math.max(0, Math.ceil(this.settleBudgetMs / CACHE_POLL_INTERVAL_MS));
-    let polls = 0;
+    // One wall-clock deadline shared by both phases below, so the whole
+    // operation is bounded wherever the time goes — including the round-trip
+    // each poll costs, which is most of it.
+    const deadline = this.now() + this.settleBudgetMs;
     let info = await this.info(id, apiKey, signal);
 
     // A brand-new magnet is briefly in `magnet_conversion` before RD can list files.
-    while (info.status !== "waiting_files_selection" && !this.settled(info) && polls < maxPolls) {
+    while (info.status !== "waiting_files_selection" && !this.settled(info) && this.now() < deadline) {
       await this.sleep(CACHE_POLL_INTERVAL_MS);
-      polls++;
       info = await this.info(id, apiKey, signal);
     }
     if (STATUS_TERMINAL_ERROR.has(info.status)) {
@@ -233,9 +241,8 @@ export class RealDebridProvider implements DebridProvider {
 
     // Cached ⇒ flips to `downloaded` almost at once. Anything still in progress
     // when the budget runs out is a real download, which we never wait for.
-    while (STATUS_IN_PROGRESS.has(info.status) && polls < maxPolls) {
+    while (STATUS_IN_PROGRESS.has(info.status) && this.now() < deadline) {
       await this.sleep(CACHE_POLL_INTERVAL_MS);
-      polls++;
       info = await this.info(id, apiKey, signal);
     }
     return info;
