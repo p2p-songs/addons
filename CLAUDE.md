@@ -69,7 +69,7 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   addon here. `mbid:recording:` (+ optional album context) → MusicBrainz →
   fan-out to the **user's own** Torznab indexers → rank candidates → per torrent:
   debrid **cache check** → **`pickFile`** → **unrestrict** → resolved https
-  stream. 157 tests, none needing network or a debrid account.
+  stream. 160 tests, none needing network or a debrid account.
   **Invariants (don't regress):** the debrid key is a *required* config field
   read only from that request's `/configure` (no env var, no default, no pooled
   account) and `configurationRequired: true` makes the router **fail closed**;
@@ -88,12 +88,23 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   to "largest" is actively wrong: WAV is uncompressed, so it beat the FLAC every
   time (the bug this fixed). Title agreement still dominates — a better-matching
   MP3 beats a FLAC of the wrong song.
+  **Discovery searches by the *track's* artist, not the release's.** A
+  compilation is credited to "Various Artists", which is useless to search for —
+  `MbTrack.artist` carries the per-track credit and `TrackContext.albumArtist`
+  keeps the release credit for **grouping only** (a `bingeGroup` must be stable
+  across an album, so it can't key on a per-track artist). Found live against
+  Prowlarr, where the query went out as `"Various Artists The Baroque, Volume 1"`.
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with
   **single-flight** (the player prefetches, so overlapping requests are normal),
-  **shorter TTL for empty results**, and **failures never cached** (the resolver's
-  outage-vs-no-match distinction needs to see them). The cache is **addon-scoped,
+  **shorter TTL for empty results**, and a **failure cooldown** — a rejection is
+  *replayed* for ~60s rather than stored as an empty result, so the caller still
+  sees the error (the resolver's outage-vs-no-match distinction depends on it)
+  while the network cost stops. Measured live: a public indexer took **19.7s**,
+  tripping the 10s client timeout, and because the rejection wasn't remembered
+  every track of the album paid it again — an album was ~42s of dead waiting,
+  now ~12s. The cache is **addon-scoped,
   not per-request** — building it per call defeats the entire purpose. In-memory
   and bounded on purpose: Comet uses a 30-day database, but Bitbop is stateless
   (Plan §2), and candidate metadata is the only thing §3 permits caching anyway.

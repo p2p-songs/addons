@@ -32,6 +32,14 @@ export interface MbTrack {
   /** MusicBrainz recording id (the streamable identity). */
   recordingId: string;
   title: string;
+  /**
+   * The credited artist for *this track*, when the release states one.
+   *
+   * On a normal album this repeats the release artist and is redundant. On a
+   * **compilation** it is the only useful artist name there is: the release is
+   * credited to "Various Artists", which is meaningless to search for.
+   */
+  artist?: string;
   /** 1-based disc (medium) number. */
   disc: number;
   /** Display position — may be free text (vinyl "A4"). */
@@ -147,6 +155,9 @@ export class MusicBrainzApi implements MusicBrainzClient {
           disc,
           position: t.number ?? String(t.position ?? ""),
         };
+        // Prefer the track-level credit; fall back to the recording's own.
+        const artist = creditToName(t["artist-credit"]) || creditToName(t.recording["artist-credit"]);
+        if (artist) track.artist = artist;
         const durationMs = t.length ?? t.recording.length;
         if (typeof durationMs === "number") track.durationMs = durationMs;
         tracks.push(track);
@@ -191,7 +202,8 @@ interface RawTrack {
   position?: number;
   title?: string;
   length?: number;
-  recording?: { id: string; title?: string; length?: number };
+  "artist-credit"?: RawArtistCredit[];
+  recording?: { id: string; title?: string; length?: number; "artist-credit"?: RawArtistCredit[] };
 }
 interface RawRecording {
   id: string;

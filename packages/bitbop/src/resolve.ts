@@ -225,7 +225,9 @@ function toStream(
     description: `${track.artist} — ${track.title}\n${candidate.indexer}${seeders}${certainty}`,
     behaviorHints: {
       // Album grouping lets the player treat a resolved album as gapless-eligible.
-      ...(track.album ? { bingeGroup: `bitbop-${normalizeGroup(track.artist, track.album)}` } : {}),
+      // Group by the *album* artist so every track of a compilation shares one
+      // group; the per-track artist would give each track its own.
+      ...(track.album ? { bingeGroup: `bitbop-${normalizeGroup(track.albumArtist ?? track.artist, track.album)}` } : {}),
       filename: link.filename ?? basename(match.file.path),
       ...(link.sizeBytes !== undefined ? { videoSize: link.sizeBytes } : {}),
       // Debrid links expire; the hint is advisory only — the player's guarantee

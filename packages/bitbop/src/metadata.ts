@@ -21,7 +21,15 @@ import type { MusicBrainzClient, MbTrack } from "@p2p-songs/musicbrainz";
 
 /** The specific track we're resolving, with whatever context we could establish. */
 export interface TrackContext {
+  /** The artist credited for *this track* — what discovery searches by. */
   artist: string;
+  /**
+   * The release's credited artist, when it differs (compilations credit
+   * "Various Artists"). Used for album *grouping*, never for searching: a
+   * bingeGroup must be stable across an album, so it can't key on a per-track
+   * artist, and a search must be specific, so it can't key on "Various Artists".
+   */
+  albumArtist?: string;
   /** Album/release title to search indexers by, when we have one. */
   album?: string;
   /** The track/recording title. */
@@ -54,7 +62,11 @@ export class MusicBrainzLookup implements MetadataLookup {
         const track = matchTrack(release.tracks, recordingUuid, request.trackId);
         if (track) {
           return {
-            artist: release.artist,
+            // The *track's* artist drives discovery. On a compilation the
+            // release is credited to "Various Artists", and searching an
+            // indexer for that finds nothing — measured live against Prowlarr.
+            artist: track.artist ?? release.artist,
+            albumArtist: release.artist,
             album: release.title,
             title: track.title,
             ...(track.durationMs ? { durationMs: track.durationMs } : {}),

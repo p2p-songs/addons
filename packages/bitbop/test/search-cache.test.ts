@@ -96,23 +96,82 @@ describe("search cache", () => {
     expect(inner.calls).toHaveLength(2);
   });
 
-  it("never caches a failure", async () => {
-    // An indexer being down must not suppress the next attempt — the resolver's
-    // outage-vs-no-match distinction depends on seeing it again.
+  it("never converts a failure into an empty result", async () => {
+    // Load-bearing: the resolver distinguishes a total outage from a genuine
+    // no-match by watching indexers reject. Answering "nothing found" would
+    // silently turn a retryable 500 into a cached empty success (A-006).
+    const dead: Indexer = {
+      name: "dead",
+      async search() {
+        throw new Error("indexer down");
+      },
+    };
+    const cached = withSearchCache(dead, new SearchCache());
+    await expect(cached.search(album("a"))).rejects.toThrow(/indexer down/);
+    await expect(cached.search(album("b"))).rejects.toThrow(/indexer down/);
+  });
+
+  it("replays a recent failure instead of paying the timeout again", async () => {
+    // Measured live: a public indexer took 19.7s and tripped the 10s timeout,
+    // and because the rejection wasn't remembered, every track of the album
+    // paid it again. One album became ~2 minutes of dead waiting.
+    let attempts = 0;
+    let clock = 0;
+    const slow: Indexer = {
+      name: "slow",
+      async search() {
+        attempts++;
+        throw new Error("timed out");
+      },
+    };
+    const cached = withSearchCache(slow, new SearchCache({ failureCooldownMs: 60_000, now: () => clock }));
+
+    for (const t of ["a", "b", "c", "d"]) {
+      await expect(cached.search(album(t))).rejects.toThrow(/timed out/);
+    }
+    expect(attempts).toBe(1); // one real attempt, three replays
+  });
+
+  it("tries again once the cooldown expires", async () => {
+    let attempts = 0;
+    let clock = 0;
+    const flaky: Indexer = {
+      name: "flaky",
+      async search() {
+        attempts++;
+        if (attempts === 1) throw new Error("blip");
+        return [candidate("b".repeat(40))];
+      },
+    };
+    const cached = withSearchCache(flaky, new SearchCache({ failureCooldownMs: 1_000, now: () => clock }));
+
+    await expect(cached.search(album("a"))).rejects.toThrow(/blip/);
+    clock = 1_001;
+    await expect(cached.search(album("a"))).resolves.toHaveLength(1);
+    expect(attempts).toBe(2);
+  });
+
+  it("clears the cooldown once the indexer recovers", async () => {
+    let clock = 0;
+    let fail = true;
     let attempts = 0;
     const flaky: Indexer = {
       name: "flaky",
       async search() {
         attempts++;
-        if (attempts === 1) throw new Error("indexer down");
-        return [candidate("b".repeat(40))];
+        if (fail) throw new Error("blip");
+        return [candidate("c".repeat(40))];
       },
     };
-    const cached = withSearchCache(flaky, new SearchCache());
+    const cached = withSearchCache(flaky, new SearchCache({ failureCooldownMs: 1_000, ttlMs: 1, now: () => clock }));
 
-    await expect(cached.search(album("a"))).rejects.toThrow(/indexer down/);
+    await expect(cached.search(album("a"))).rejects.toThrow(/blip/);
+    fail = false;
+    clock = 1_001;
     await expect(cached.search(album("a"))).resolves.toHaveLength(1);
-    expect(attempts).toBe(2);
+    clock = 1_003; // entry expired, but no stale cooldown should resurface
+    await expect(cached.search(album("a"))).resolves.toHaveLength(1);
+    expect(attempts).toBe(3);
   });
 
   it("does not let one caller's abort poison the shared search", async () => {
