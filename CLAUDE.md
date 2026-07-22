@@ -170,15 +170,39 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   free-text position). Cover Art Archive posters. **Artist search leads
   somewhere:** a `byArtist` album catalog (`artistId` extra) returns the
   artist's discography as ordinary `mbid:release:` previews, so the player's
-  album screen needs no special case. Three MusicBrainz facts make that list
+  album screen needs no special case. Four MusicBrainz facts make that list
   usable, and skipping any one produces a plausible-looking but useless result:
-  a release *group* is the album while a release is one pressing (collapse to
-  the earliest — the original, least likely to carry bonus-track padding);
   `primary-type: Album` still admits **live records, compilations and
   bootlegs**, so any `secondary-types` disqualifies (unfiltered, Radiohead
-  returned 25 rows with zero studio albums); and browse pages at 100 in no
+  returned 25 rows with zero studio albums); browse pages at 100 in no
   useful order, so `type=album&status=official` filters server-side (1140
-  releases → 274) to make a 3-page cap actually cover a discography. 17 tests.
+  releases → 274) to make a 3-page cap actually cover a discography; and a
+  release *group* is the album while a release is one **pressing**, of which a
+  popular album has dozens (SOUR: 53), so both the discography and album search
+  collapse to one release per group.
+  **Which pressing represents the group is correctness-critical, not cosmetic**
+  (`betterRepresentative`). We shipped the Taiwanese SOUR — tracks titled
+  `brutal 残酷`, artist credited `奧莉維亞` — and that name reaches Bitbop's
+  indexer query, so every search was a guaranteed miss against torrents named
+  "Olivia Rodrigo". Two independent causes, both fixed:
+  - **MusicBrainz dates carry precision** (`2021`, `2021-08`, `2021-05-21`), and
+    string comparison makes the *vaguest* win: `"2021" < "2021-05-21"`. The
+    year-only Taiwanese pressing thereby posed as the original. `dateKey` pads
+    unknown month/day to the end of their period — a date known only to the year
+    is not evidence of preceding a day inside it.
+  - **Age was the only criterion.** Canonical naming now outranks it: a pressing
+    that renames the album or re-credits the artist is unusable however
+    original. The test is self-contained and needs no locale/country/script
+    list, because MusicBrainz stores the canonical name beside the localized one
+    — `artist-credit[].artist.name` next to the as-credited `.name`, and the
+    release *group*'s title next to the release's — so we just ask whether the
+    pressing agrees with them. **Do not reach for `text-representation.script`**:
+    it is wrong for exactly this case (the Japanese サワー pressing reports
+    `Latn`). And nothing here privileges Latin script — an artist whose
+    canonical names *are* non-Latin agrees with their own group title and artist
+    name, so their pressings pass and the choice falls through to date.
+
+  18 musicbrainz tests / 17 musicmeta tests.
 
 All three consume the shared rate-limited `@p2p-songs/musicbrainz` client;
 sources, indexers, and debrid providers are injected behind interfaces

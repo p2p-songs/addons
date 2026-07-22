@@ -118,12 +118,32 @@ export class MusicBrainzApi implements MusicBrainzClient {
     return (body?.artists ?? []).map((a) => ({ id: a.id, name: a.name }));
   }
 
+  /**
+   * Album search, collapsed to one release per album.
+   *
+   * Raw release search is unusable as an album list: a popular album has dozens
+   * of pressings, all matching equally, so the results are the same title over
+   * and over — and which pressing surfaces first is arbitrary, so it may well be
+   * a regional one titled in another script. Both problems are the same problem,
+   * and {@link betterRepresentative} is the same answer as in the discography.
+   *
+   * We over-fetch to give the collapse headroom (25 requested albums can easily
+   * be 100 releases) and keep MusicBrainz's relevance order for the groups
+   * themselves — relevance is the whole point of a search, unlike a discography.
+   */
   async searchReleases(query: string, limit: number, signal?: AbortSignal): Promise<MbRelease[]> {
+    const fetchLimit = Math.min(limit * SEARCH_OVERFETCH, SEARCH_MAX_LIMIT);
     const body = await this.get<{ releases?: RawRelease[] }>(
-      `/release?query=${encodeURIComponent(query)}&fmt=json&limit=${limit}`,
+      `/release?query=${encodeURIComponent(query)}&fmt=json&limit=${fetchLimit}`,
       signal,
     );
-    return (body?.releases ?? []).map(toRelease);
+    const byGroup = new Map<string, RawRelease>();
+    for (const r of body?.releases ?? []) {
+      const groupId = r["release-group"]?.id ?? r.id;
+      const seen = byGroup.get(groupId);
+      if (!seen || betterRepresentative(r, seen)) byGroup.set(groupId, r);
+    }
+    return [...byGroup.values()].slice(0, limit).map(toRelease);
   }
 
   /**
@@ -133,10 +153,11 @@ export class MusicBrainzApi implements MusicBrainzClient {
    * list that looks plausible and is useless:
    *
    * 1. A "release group" is the album; a "release" is one pressing of it. A
-   *    popular album easily has 30+ (CD, vinyl, per-country, reissues), so an
-   *    unfiltered release list buries ten albums under hundreds of duplicates.
-   *    We keep the **earliest** release per group — the original pressing, and
-   *    the one least likely to carry bonus-track padding.
+   *    popular album easily has 30+ (CD, vinyl, per-country, reissues) — SOUR
+   *    has 53 — so an unfiltered release list buries ten albums under hundreds
+   *    of duplicates. {@link betterRepresentative} picks the one to keep:
+   *    canonically named first, then earliest — the original pressing, and the
+   *    one least likely to carry bonus-track padding.
    * 2. Release groups are typed. Without filtering on that, a well-documented
    *    artist returns mostly **bootlegs, radio sessions and singles**: browsing
    *    Radiohead this way produced 25 rows of which zero were studio albums.
@@ -165,13 +186,13 @@ export class MusicBrainzApi implements MusicBrainzClient {
         if (!isStudioAlbum(group)) continue;
         const groupId = group?.id ?? r.id;
         const seen = byGroup.get(groupId);
-        if (!seen || earlier(r.date, seen.date)) byGroup.set(groupId, r);
+        if (!seen || betterRepresentative(r, seen)) byGroup.set(groupId, r);
       }
       const total = body?.["release-count"];
       if (releases.length < BROWSE_PAGE_SIZE || (total !== undefined && (page + 1) * BROWSE_PAGE_SIZE >= total)) break;
     }
     return [...byGroup.values()]
-      .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "")) // newest album first
+      .sort((a, b) => dateKey(b.date).localeCompare(dateKey(a.date))) // newest album first
       .slice(0, limit)
       .map(toRelease);
   }
@@ -234,8 +255,11 @@ function retryAfterMs(res: Response): number {
 // --- raw MusicBrainz JSON → domain shapes ---
 
 interface RawArtistCredit {
+  /** The name **as credited on this release** — localized on a regional pressing. */
   name: string;
   joinphrase?: string;
+  /** The artist entity itself, whose `name` is canonical. See {@link presentsCanonicalNames}. */
+  artist?: { id: string; name: string };
 }
 interface RawArtist {
   id: string;
@@ -251,21 +275,89 @@ interface RawRelease {
 }
 interface RawReleaseGroup {
   id: string;
+  /** The album's canonical title, as opposed to this pressing's. */
+  title?: string;
   /** "Album" | "Single" | "EP" | "Broadcast" | "Other". */
   "primary-type"?: string;
   /** "Live" | "Compilation" | "Remix" | "DJ-mix" | "Bootleg" | … — any of these disqualifies. */
   "secondary-types"?: string[];
 }
 
-/** A missing date sorts last: an undated pressing is a worse "original" than a dated one. */
-function earlier(a: string | undefined, b: string | undefined): boolean {
-  if (!a) return false;
-  if (!b) return true;
-  return a < b;
+/**
+ * Which of two pressings should stand for their album.
+ *
+ * Canonical naming outranks age, because a pressing that renames the album or
+ * the artist is unusable downstream no matter how original it is.
+ */
+function betterRepresentative(candidate: RawRelease, incumbent: RawRelease): boolean {
+  const c = presentsCanonicalNames(candidate);
+  const i = presentsCanonicalNames(incumbent);
+  if (c !== i) return c;
+  return dateKey(candidate.date) < dateKey(incumbent.date);
+}
+
+/**
+ * Does this pressing present the album under its canonical names?
+ *
+ * A regional pressing may retitle the album and re-credit the artist in the
+ * local script. MusicBrainz lists a Taiwanese SOUR credited to 奧莉維亞 and a
+ * Japanese one titled サワー — both perfectly legitimate releases, and both
+ * useless to us: the localized name is not what the user typed, not what the
+ * cover art shows them, and not what any torrent is named, so it silently
+ * turns every downstream indexer query into a guaranteed miss.
+ *
+ * The test needs no locale, country or script list, because MusicBrainz already
+ * stores the canonical name beside the localized one: `artist-credit[].artist.name`
+ * is the artist's own name next to the as-credited `.name`, and the release
+ * *group* carries the album's title next to the release's. So we just ask
+ * whether this pressing agrees with them.
+ *
+ * Explicitly **not** `text-representation.script`, the obvious-looking signal:
+ * it is wrong for precisely this case — the Japanese サワー pressing reports
+ * `script: "Latn"`.
+ *
+ * Nothing here privileges Latin script. An artist whose canonical names *are*
+ * non-Latin agrees with their own group title and artist name, so their
+ * pressings all pass and the choice falls through to date, exactly as before.
+ */
+function presentsCanonicalNames(r: RawRelease): boolean {
+  const groupTitle = r["release-group"]?.title;
+  if (groupTitle !== undefined && normalizeName(r.title) !== normalizeName(groupTitle)) return false;
+  return (r["artist-credit"] ?? []).every((c) => !c.artist || normalizeName(c.name) === normalizeName(c.artist.name));
+}
+
+function normalizeName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * A MusicBrainz date sorted so that "earliest" means what we mean.
+ *
+ * Dates carry their precision — `2021`, `2021-08` and `2021-05-21` are all
+ * valid — and comparing them as plain strings makes the *vaguest* one win,
+ * since `"2021" < "2021-05-21"`. That is how a year-only Taiwanese pressing
+ * beat the dated original and became the SOUR we showed. Padding an unknown
+ * month or day to the end of its period states the actual rule: knowing a date
+ * only to the year is not evidence of being earlier than a day inside it.
+ *
+ * An undated pressing sorts last — a worse "original" than any dated one.
+ */
+function dateKey(date: string | undefined): string {
+  if (!date) return "9999-99-99";
+  const [year = "9999", month = "99", day = "99"] = date.split("-");
+  return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
 /** MusicBrainz browse caps a page at 100. */
 const BROWSE_PAGE_SIZE = 100;
+/**
+ * Headroom for collapsing search results to one release per album. Dozens of
+ * pressings share an album, so asking for exactly `limit` releases would return
+ * far fewer than `limit` albums.
+ */
+const SEARCH_OVERFETCH = 4;
+/** MusicBrainz caps a search page at 100. */
+const SEARCH_MAX_LIMIT = 100;
 /**
  * Pages to scan for a discography. Each costs ~1s of the rate-limit budget, so
  * this trades completeness for a page that actually loads: 300 releases covers

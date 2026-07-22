@@ -78,6 +78,50 @@ describe("MusicBrainzApi parsing", () => {
   });
 });
 
+describe("searchReleases (album search)", () => {
+  const searchFetch = (releases: unknown[], asked: string[]): typeof fetch =>
+    (async (input: string | URL) => {
+      asked.push(typeof input === "string" ? input : input.toString());
+      return new Response(JSON.stringify({ releases }), { status: 200 });
+    }) as typeof fetch;
+
+  it("returns one row per album, using the canonically named pressing", async () => {
+    // Unfiltered, an album search is the same title repeated once per pressing,
+    // and whichever pressing happens to sort first — possibly a localized one.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(searchFetch([
+      {
+        id: "taiwan", title: "SOUR", date: "2021",
+        "artist-credit": [{ name: "奧莉維亞", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { id: "g1", title: "SOUR" },
+      },
+      {
+        id: "worldwide", title: "SOUR", date: "2021-05-21",
+        "artist-credit": [{ name: "Olivia Rodrigo", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { id: "g1", title: "SOUR" },
+      },
+      {
+        id: "guts", title: "GUTS", date: "2023-09-08",
+        "artist-credit": [{ name: "Olivia Rodrigo", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { id: "g2", title: "GUTS" },
+      },
+    ], asked)));
+
+    const albums = await api.searchReleases("olivia rodrigo", 25);
+    expect(albums.map((a) => a.id)).toEqual(["worldwide", "guts"]); // relevance order kept
+    expect(albums[0]!.artist).toBe("Olivia Rodrigo");
+  });
+
+  it("over-fetches so collapsing still fills the requested count, within MusicBrainz's cap", async () => {
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(searchFetch([], asked)));
+    await api.searchReleases("q", 10);
+    expect(asked[0]).toContain("limit=40");
+    await api.searchReleases("q", 50);
+    expect(asked[1]).toContain("limit=100");
+  });
+});
+
 describe("browseArtistReleases (discography)", () => {
   const ARTIST = "cccccccc-cccc-cccc-cccc-cccccccccccc";
   const group = (id: string, primary?: string, secondary?: string[]) => ({
@@ -111,6 +155,68 @@ describe("browseArtistReleases (discography)", () => {
 
     const albums = await api.browseArtistReleases(ARTIST, 25);
     expect(albums.map((a) => a.title)).toEqual(["Studio One"]);
+  });
+
+  it("prefers the pressing that uses the album's and artist's canonical names", async () => {
+    // The live failure: MusicBrainz's SOUR has 53 pressings, and we showed the
+    // Taiwanese one — track titles annotated in Han script, artist credited as
+    // 奧莉維亞. Nothing downstream can search for that.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      {
+        id: "taiwan", title: "SOUR", date: "2021",
+        "artist-credit": [{ name: "奧莉維亞", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { ...group("g1", "Album"), title: "SOUR" },
+      },
+      {
+        id: "japan", title: "サワー", date: "2021-06-02",
+        "artist-credit": [{ name: "オリヴィア・ロドリゴ", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { ...group("g1", "Album"), title: "SOUR" },
+      },
+      {
+        id: "worldwide", title: "SOUR", date: "2021-05-21",
+        "artist-credit": [{ name: "Olivia Rodrigo", artist: { id: "a1", name: "Olivia Rodrigo" } }],
+        "release-group": { ...group("g1", "Album"), title: "SOUR" },
+      },
+    ]], asked)));
+
+    const albums = await api.browseArtistReleases(ARTIST, 25);
+    expect(albums).toHaveLength(1);
+    expect(albums[0]).toMatchObject({ id: "worldwide", title: "SOUR", artist: "Olivia Rodrigo" });
+  });
+
+  it("does not privilege Latin script: an artist with non-Latin names keeps their own", async () => {
+    // The rule is "agrees with its own group title and artist name", not "looks
+    // English" — so a Japanese artist's Japanese pressing is the canonical one.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      {
+        id: "export", title: "Solid State Survivor", date: "1979-09-25",
+        "artist-credit": [{ name: "Yellow Magic Orchestra", artist: { id: "a2", name: "イエロー・マジック・オーケストラ" } }],
+        "release-group": { ...group("g1", "Album"), title: "ソリッド・ステイト・サヴァイヴァー" },
+      },
+      {
+        id: "domestic", title: "ソリッド・ステイト・サヴァイヴァー", date: "1979-09-25",
+        "artist-credit": [{ name: "イエロー・マジック・オーケストラ", artist: { id: "a2", name: "イエロー・マジック・オーケストラ" } }],
+        "release-group": { ...group("g1", "Album"), title: "ソリッド・ステイト・サヴァイヴァー" },
+      },
+    ]], asked)));
+
+    const albums = await api.browseArtistReleases(ARTIST, 25);
+    expect(albums[0]!.id).toBe("domestic");
+  });
+
+  it("treats a vague date as vague, not early", async () => {
+    // `"2021" < "2021-05-21"` as plain strings, which let a year-only pressing
+    // pose as the original. Precision is not evidence of age.
+    const asked: string[] = [];
+    const api = new MusicBrainzApi("test/0.0", opts(pagedFetch([[
+      { id: "year-only", title: "Album", date: "2021", "release-group": group("g1", "Album") },
+      { id: "exact", title: "Album", date: "2021-05-21", "release-group": group("g1", "Album") },
+    ]], asked)));
+
+    const albums = await api.browseArtistReleases(ARTIST, 25);
+    expect(albums[0]!.id).toBe("exact");
   });
 
   it("collapses a release group to its earliest release", async () => {
