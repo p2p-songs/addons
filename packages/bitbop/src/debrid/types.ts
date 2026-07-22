@@ -23,6 +23,23 @@ export interface DebridFile {
   sizeBytes?: number;
 }
 
+/**
+ * A torrent, as addressed across a provider call. `infoHash` always identifies
+ * it; `handle` is an optional provider-side id (Real-Debrid's torrent id) for a
+ * torrent already materialized on the account.
+ *
+ * The handle exists because on Real-Debrid — and every provider that followed it
+ * once `/torrents/instantAvailability` was withdrawn — *asking* whether a
+ * torrent is cached is the same operation as *adding* it. Threading the handle
+ * from `checkCache` into `resolveFile` is what stops a single resolution from
+ * adding the same torrent to the user's account twice.
+ */
+export interface TorrentRef {
+  infoHash: string;
+  /** Provider-side torrent id from a prior {@link DebridProvider.checkCache} or {@link DebridProvider.listCached}. */
+  handle?: string;
+}
+
 /** The result of checking whether a torrent's files are already cached. */
 export interface CacheResult {
   /** True if the provider can serve this torrent's files without a fresh download. */
@@ -34,6 +51,8 @@ export interface CacheResult {
    * skipped (Bitbop only ever serves already-cached torrents).
    */
   files?: DebridFile[];
+  /** Provider-side id of the torrent this check resolved to; pass to `resolveFile`. */
+  handle?: string;
 }
 
 /** A resolved, directly-playable link to one file. */
@@ -57,24 +76,48 @@ export interface DebridProvider {
   readonly id: string;
 
   /**
-   * Check whether a torrent (by infohash) is already cached, and if so list its
-   * files. Rejects on transport/auth failure so the resolver can isolate it.
+   * **Non-mutating** bulk pre-check: of these infohashes, which are already
+   * sitting downloaded on the user's account? Returns infohash → handle.
+   *
+   * This is the cheap path, and for an album it is the *common* path: resolving
+   * track 1 leaves the album torrent on the account, so tracks 2…n are answered
+   * here for one request instead of one add apiece. Implementations must not add,
+   * select, or delete anything. Optional — a provider without a listing API can
+   * omit it and every candidate goes through {@link checkCache}.
    */
-  checkCache(infoHash: string, apiKey: string, signal?: AbortSignal): Promise<CacheResult>;
+  listCached?(infoHashes: string[], apiKey: string, signal?: AbortSignal): Promise<Map<string, string>>;
+
+  /**
+   * Check whether a torrent is already cached, and if so list its files.
+   *
+   * When `ref.handle` is set this is a read. When it is not, the provider may
+   * have to *materialize* the torrent to find out (see {@link TorrentRef}) — in
+   * which case it must clean up after itself: anything it added that turns out
+   * not to be cached has to be removed before returning, so a cache check never
+   * leaves a download running on the user's account. A torrent the user already
+   * had is never deleted.
+   *
+   * Rejects on transport/auth failure so the resolver can isolate it.
+   */
+  checkCache(ref: TorrentRef, apiKey: string, signal?: AbortSignal): Promise<CacheResult>;
 
   /**
    * Unrestrict one file to a direct link. `fileId` comes from the
-   * {@link DebridFile} chosen by `pickFile`. Rejects on failure.
+   * {@link DebridFile} chosen by `pickFile`; pass the `handle` from the
+   * {@link CacheResult} so this doesn't re-add what `checkCache` just added.
+   * Rejects on failure.
    */
-  resolveFile(infoHash: string, fileId: string, apiKey: string, signal?: AbortSignal): Promise<ResolvedLink>;
+  resolveFile(ref: TorrentRef, fileId: string, apiKey: string, signal?: AbortSignal): Promise<ResolvedLink>;
 }
 
 /** Raised when a provider call fails in a way worth distinguishing (auth vs. transient). */
 export class DebridError extends Error {
   constructor(
     message: string,
-    /** True for 401/403 — the user's key is bad, which is worth surfacing distinctly. */
+    /** True for 401/403 and Real-Debrid's auth error codes — the user's key is bad. */
     readonly isAuth: boolean = false,
+    /** Provider-specific error code, when the provider reports one (RD's `error_code`). */
+    readonly code?: number,
   ) {
     super(message);
     this.name = "DebridError";

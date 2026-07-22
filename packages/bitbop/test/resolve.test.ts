@@ -43,6 +43,8 @@ const albumFiles = [
 
 const providerOf = (over: Partial<DebridProvider> & { cache?: CacheResult; link?: ResolvedLink } = {}): DebridProvider => ({
   id: "realdebrid",
+  // Optional on the port: only present when a test opts into the bulk pre-check.
+  ...(over.listCached ? { listCached: over.listCached } : {}),
   checkCache: over.checkCache ?? (async () => over.cache ?? { cached: true, files: albumFiles }),
   resolveFile: over.resolveFile ?? (async () => over.link ?? { url: "https://rd.example/dl/digital-love.flac", filename: "03 - Digital Love.flac", sizeBytes: 50_000_000 }),
 });
@@ -74,6 +76,57 @@ describe("resolveStreams — happy path", () => {
     });
     await resolveStreams({ recordingId: RID }, config(), deps({ provider }));
     expect(seenKeys.every((k) => k === "RDKEY")).toBe(true);
+  });
+});
+
+describe("resolveStreams — reusing what the account already holds", () => {
+  it("probes an already-downloaded torrent without adding anything, and threads its handle", async () => {
+    // The second-and-later tracks of an album take this path: track 1 left the
+    // torrent on the account, so the rest of the album costs no writes at all.
+    const seen: { check?: string; resolve?: string } = {};
+    const provider = providerOf({
+      listCached: async () => new Map([[candidate.infoHash.toLowerCase(), "T-EXISTING"]]),
+      checkCache: async (ref) => ((seen.check = ref.handle), { cached: true, files: albumFiles, handle: ref.handle }),
+      resolveFile: async (ref) => ((seen.resolve = ref.handle), { url: "https://rd.example/dl/x.flac" }),
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ provider }));
+
+    expect(result.streams).toHaveLength(1);
+    expect(seen.check).toBe("T-EXISTING");
+    expect(seen.resolve).toBe("T-EXISTING");
+  });
+
+  it("tries the account's own torrents before spending an add on anything else", async () => {
+    const known = { ...candidate, infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+    const unknown = { ...candidate, infoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", seeders: 9999 };
+    const order: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map([[known.infoHash, "T-KNOWN"]]),
+      checkCache: async (ref) => (order.push(ref.infoHash), { cached: true, files: albumFiles, handle: ref.handle }),
+    });
+    // `unknown` outranks `known` on seeders, yet the free probe still goes first.
+    await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf([unknown, known])], provider }));
+    expect(order[0]).toBe(known.infoHash);
+  });
+
+  it("falls back to probing when the bulk pre-check fails", async () => {
+    const provider = providerOf({
+      listCached: async () => {
+        throw new DebridError("rate limited", false);
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ provider }));
+    expect(result.streams).toHaveLength(1); // an optimization failing is not an outage
+  });
+
+  it("still reports an outage when the pre-check rejects the key", async () => {
+    const provider = providerOf({
+      listCached: async () => {
+        throw new DebridError("auth failed", true);
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ provider }));
+    expect(result.outage).toBe(true);
   });
 });
 
@@ -138,8 +191,8 @@ describe("resolveStreams — failure semantics", () => {
   it("does NOT report an outage when some candidates fail but one succeeds", async () => {
     const good = { ...candidate, infoHash: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" };
     const provider = providerOf({
-      checkCache: async (hash) => {
-        if (hash !== good.infoHash) throw new DebridError("boom", false);
+      checkCache: async (ref) => {
+        if (ref.infoHash !== good.infoHash) throw new DebridError("boom", false);
         return { cached: true, files: albumFiles };
       },
     });
@@ -152,14 +205,35 @@ describe("resolveStreams — failure semantics", () => {
     const good = { ...candidate, infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
     const bad = { ...candidate, infoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
     const provider = providerOf({
-      checkCache: async (hash) => {
-        if (hash === bad.infoHash) throw new DebridError("torrent gone", false); // transient, not auth
+      checkCache: async (ref) => {
+        if (ref.infoHash === bad.infoHash) throw new DebridError("torrent gone", false); // transient, not auth
         return { cached: true, files: albumFiles };
       },
     });
     const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf([bad, good])], provider }));
     expect(result.outage).toBe(false);
     expect(result.streams).toHaveLength(1);
+  });
+
+  it("caps how many *uncached* torrents it will add to the account", async () => {
+    // Nothing is on the account, so every probe is an expensive add. Real-Debrid
+    // allows 250 requests/minute and the player prefetches ahead — an unbounded
+    // fan-out here is a self-inflicted rate limit.
+    const many = Array.from({ length: 10 }, (_, i) => ({ ...candidate, infoHash: String(i).repeat(40) }));
+    const probed: string[] = [];
+    const provider = providerOf({
+      checkCache: async (ref) => (probed.push(ref.infoHash), { cached: false }),
+    });
+    await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf(many)], provider }));
+    expect(probed).toHaveLength(3);
+  });
+
+  it("does not report an outage merely because the add budget ran out", async () => {
+    const many = Array.from({ length: 10 }, (_, i) => ({ ...candidate, infoHash: String(i).repeat(40) }));
+    const provider = providerOf({ cache: { cached: false } });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf(many)], provider }));
+    expect(result.outage).toBe(false);
+    expect(result.streams).toEqual([]);
   });
 
   it("returns nothing when metadata can't resolve the recording", async () => {

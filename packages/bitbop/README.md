@@ -103,10 +103,43 @@ that could never produce a stream (audit A-011). Adding a provider is a
 an uncached torrent means waiting on a debrid-side download, which a player can't
 do mid-queue.
 
+## Why checking the cache is not a read
+
+Real-Debrid withdrew `/torrents/instantAvailability`. What replaced it is a state
+machine that only reports `downloaded` **after** file selection — and selection is
+also what starts a download. There is no read-only way left to ask "is this
+cached?"; every serious client works around it (MediaFusion scans your account
+list, Comet and StremThru consult a shared availability database).
+
+Bitbop keeps the question local, and makes the unavoidable write safe:
+
+- **A non-mutating pre-pass** (`GET /torrents`) answers every candidate your
+  account already holds. Playing an album, that's the common case — track 1
+  leaves the torrent there, so tracks 2…n add nothing at all.
+- **Anything added to check is deleted unless it turns out cached.** A cache
+  check never leaves a download running. A torrent *you* already had is never
+  touched.
+- **Only audio files are selected**, never `files=all` — so a miss can't cost you
+  an entire album's download, and the link list stays free of cover art and logs.
+- **Probes that require an add are rationed** separately from free ones. RD allows
+  250 requests/minute and the player prefetches ahead of playback.
+
+Bitbop deliberately does **not** join the shared cache networks. Publishing which
+hashes are cached is a coordinated availability index, which is exactly the line
+[Legal posture](#legal-posture-plan-3--non-negotiable) draws. The honest cost:
+the first query for a torrent nobody has fetched yet is always a real round-trip.
+
 ## Tests
 
-`pnpm test` — 122 tests, no network or debrid account required (indexers, the
+`pnpm test` — 140 tests, no network or debrid account required (indexers, the
 debrid provider, and metadata are all injected behind interfaces and driven with
 fakes). The correctness-critical file-selection logic is the most heavily
 covered, followed by the address policy (every deny range asserted individually,
 plus a loopback listener that proves the guard never opens the connection).
+
+The Real-Debrid fake models the **real** state machine — a magnet lands in
+`waiting_files_selection`, only selection moves it on, and `links` is derived
+from what was selected. That matters: the earlier fake let `checkCache` look
+correct while, against the live API, it was adding torrents to the user's account
+and starting album downloads. A fake that agrees with your assumptions tests
+nothing.

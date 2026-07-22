@@ -69,7 +69,7 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   addon here. `mbid:recording:` (+ optional album context) → MusicBrainz →
   fan-out to the **user's own** Torznab indexers → rank candidates → per torrent:
   debrid **cache check** → **`pickFile`** → **unrestrict** → resolved https
-  stream. 66 tests, none needing network or a debrid account.
+  stream. 140 tests, none needing network or a debrid account.
   **Invariants (don't regress):** the debrid key is a *required* config field
   read only from that request's `/configure` (no env var, no default, no pooled
   account) and `configurationRequired: true` makes the router **fail closed**;
@@ -93,6 +93,22 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   (retryable 500), not a cached no-match; and no config field may name a mode the
   addon can't serve — that's why AllDebrid and `cachedOnly` are out of the
   **schema**, not merely hidden in the UI.
+  **Debrid account hygiene (don't regress):** Real-Debrid withdrew
+  `/torrents/instantAvailability`, and the state machine that replaced it only
+  reports `downloaded` *after* file selection — which is also what **starts a
+  download**. So a cache check is unavoidably a write, and the rules exist to
+  make that write safe: anything the addon adds to check is **deleted unless
+  cached** (never a torrent the user already had); selection is **audio-only,
+  never `files=all`**, so a miss can't cost a whole album; the torrent id is
+  **threaded from `checkCache` into `resolveFile`** via `TorrentRef.handle` so
+  one resolution never adds twice; a **non-mutating `GET /torrents` pre-pass**
+  (`listCached`) answers what the account already holds, which for an album is
+  every track after the first; and add-requiring probes are rationed separately
+  (`MAX_UNCACHED_PROBES`) against RD's **250 req/min**. Also: RD reports errors
+  in a **200 body** (`{error, error_code}`) — parse it, and map codes 8–15 to the
+  same auth path as HTTP 401/403. We deliberately do **not** join the ecosystem's
+  shared cache network (StremThru's Buddy/Peer): publishing which hashes are
+  cached is a coordinated availability index, which Plan §3 rules out.
 
 - **`stream-legal`** (#3) — zero-config stream addon: `mbid:recording:<uuid>` →
   MusicBrainz metadata lookup → **fixed source allowlist** (Internet Archive
