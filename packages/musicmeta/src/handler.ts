@@ -4,15 +4,26 @@ import { manifest } from "./manifest.js";
 import { searchCatalog, artistAlbumsCatalog } from "./catalog.js";
 import { metaFor } from "./meta.js";
 import type { MusicBrainzClient } from "@p2p-songs/musicbrainz";
+import type { SearchIndex } from "./search-index.js";
 
 export interface MusicMetaDeps {
   mb: MusicBrainzClient;
   /** Max catalog results per search (default 25). */
   catalogLimit?: number;
+  /**
+   * Optional search accelerator. Absent → catalog search is direct MusicBrainz
+   * (unchanged). Present (Meilisearch) → read-through/write-back, so search is
+   * ranked, typo-tolerant, and warms itself. Purely additive.
+   */
+  index?: SearchIndex;
 }
 
 export function createMusicMetaAddon(deps: MusicMetaDeps): AddonInterface {
-  const catalogDeps = { mb: deps.mb, ...(deps.catalogLimit ? { limit: deps.catalogLimit } : {}) };
+  const catalogDeps = {
+    mb: deps.mb,
+    ...(deps.catalogLimit ? { limit: deps.catalogLimit } : {}),
+    ...(deps.index ? { index: deps.index } : {}),
+  };
   return new AddonBuilder(manifest)
     .defineCatalogHandler(async ({ type, id, extra }) => {
       if (id === "byArtist") {

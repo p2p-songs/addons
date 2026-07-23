@@ -189,6 +189,22 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   artist's discography as ordinary `mbid:release:` previews, so the player's
   album screen needs no special case.
 
+  **Search index (2026-07-23):** catalog search takes an optional Meilisearch
+  accelerator via the `SearchIndex` port (`search-index.ts`; `MeiliSearchIndex`
+  is a raw-`fetch` adapter, no new dep). **Read-through/write-back** —
+  Meilisearch first (ranked, typo-tolerant), a MusicBrainz miss hydrates it —
+  which is what makes `"justin bieber baby"` find the song, not the artist. Two
+  invariants (don't regress): it holds **identity only** (`metaPreview`: id +
+  name + poster, **no hashes/sources**), so it is legally inert and shareable
+  (contrast the *stream* hash cache §3 forbids sharing — the Buddy/Peer note
+  above); and it is an **accelerator, never a dependency** — `MEILI_URL` unset,
+  or Meili down/slow, and `searchCatalog` is the original direct-MB path, off
+  neither the happy path nor the response latency (write-back is fire-and-forget
+  with a swallowed rejection). `serve.ts` wires it only when `MEILI_URL` is set.
+  Being identity-only is also why `musicmeta` is the addon that may be
+  **default-installed** in the player (neutrality §11 governs the *stream* plane;
+  a default metadata addon is fine) — player wiring is a follow-up increment.
+
   **The discography is a release-*group* `search`, not a release `browse`**
   (`artistDiscography`) — one request per artist, complete. Three live
   measurements forced that, and each was a bug first:
@@ -264,7 +280,7 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   names *are* non-Latin agrees with their own group title and artist name, so
   their pressings pass and the choice falls through to date.
 
-  27 musicbrainz tests / 17 musicmeta tests.
+  27 musicbrainz tests / 24 musicmeta tests.
 
 All three consume the shared rate-limited `@p2p-songs/musicbrainz` client;
 sources, indexers, and debrid providers are injected behind interfaces

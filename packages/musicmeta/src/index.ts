@@ -7,8 +7,12 @@
 export { createMusicMetaAddon } from "./handler.js";
 export type { MusicMetaDeps } from "./handler.js";
 export { manifest } from "./manifest.js";
-export { searchCatalog } from "./catalog.js";
+export { searchCatalog, DEFAULT_MIN_INDEX_HITS } from "./catalog.js";
 export type { CatalogDeps } from "./catalog.js";
+export { FakeSearchIndex, normalize } from "./search-index.js";
+export type { SearchIndex } from "./search-index.js";
+export { MeiliSearchIndex } from "./meili.js";
+export type { MeiliOptions } from "./meili.js";
 export { metaFor } from "./meta.js";
 export type { MetaDeps } from "./meta.js";
 export { releaseFrontCover, releaseGroupFrontCover } from "./coverart.js";
