@@ -25,6 +25,7 @@ to any S3 provider.
 ## Commands
 
 ```
+node dist/cli.js build   <canonical.csv> [out.ndjson]   curate top-N-by-popularity → NDJSON
 node dist/cli.js publish <file.ndjson>   upload an immutable snapshot + repoint latest.json
 node dist/cli.js stage   <file.ndjson> [dir]   write those objects to a local dir (any uploader)
 node dist/cli.js import  [--]           R2 latest → verify → zero-downtime reindex into Meili
@@ -33,9 +34,32 @@ node dist/cli.js versions               list snapshot keys, newest first
 node dist/cli.js rollback <key>         repoint latest.json at an existing snapshot
 ```
 
+`build` streams the **MusicBrainz canonical dump** CSV, keeps the top-N recordings
+by the dump's `score` (a ListenBrainz-listen-derived popularity/priority ranking —
+`CATALOG_LIMIT`, default 250 000), and derives the unified artist/album/track
+documents from exactly that set. Memory is bounded to the retained set (a min-heap),
+so the whole multi-GB dump streams through. Official-by-construction: the canonical
+mapping already prefers official releases and free-text search is never used, so
+parodies/covers/bootlegs don't enter. Each doc carries its popularity `score`, which
+`import` wires as Meili's final ranking tiebreaker (relevance first, popularity breaks
+ties). Get the CSV with:
+
+```sh
+BASE=https://data.metabrainz.org/pub/musicbrainz/canonical_data
+DUMP=$(curl -sL "$BASE/" | grep -oE 'musicbrainz-canonical-dump-[0-9]{8}-[0-9]{6}' | sort -u | tail -1)
+curl -sL "$BASE/$DUMP/$DUMP.tar.zst" \
+  | tar --use-compress-program=unzstd -x \
+        --wildcards '*/canonical/canonical_musicbrainz_data.csv' --strip-components=2
+```
+
 `import` builds a `<index>__staging` index, applies the validated search settings,
 streams the dataset in, then **atomically swaps** it with the live index — so the
 live catalogue is never half-populated and removed songs actually disappear.
+
+The nightly build+publish is automated in
+[`.github/workflows/catalog-nightly.yml`](../../.github/workflows/catalog-nightly.yml)
+(fetch → `build` → `publish`); it needs the R2 secrets below in the repo's Actions
+secrets. `import` is triggered separately, inside Railway, where Meili is reachable.
 
 ## Configuration (environment only — never the CLI or the repo)
 
@@ -63,9 +87,9 @@ handoff between the two halves. See `docs/CATALOG_PIPELINE.md` → "Where it run
 
 ## Status
 
-Storage + import proven end-to-end against real R2 + Meili. The current data
-builder is a prototype (`../musicmeta/scripts/build-sample.mjs`, per-artist API
-traversal, curated seed); the production `build` will process the MusicBrainz
-canonical bulk dump + ListenBrainz popularity offline. 7 tests.
+Storage + import proven end-to-end against real R2 + Meili. The production `build`
+command over the MusicBrainz canonical bulk dump is implemented and replaces the
+per-artist API prototype (`../musicmeta/scripts/build-sample.mjs`, kept only as a
+small eyeball tool). Nightly build+publish is wired as a GitHub Action. 22 tests.
 
 Build: `pnpm build` · Test: `pnpm test` · Typecheck: `pnpm typecheck`.

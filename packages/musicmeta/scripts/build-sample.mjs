@@ -7,9 +7,10 @@
  * getAlbum) over a curated artist seed. No free-text search, so no parodies /
  * covers / bootlegs can leak in — every row is official by construction.
  *
- * PRODUCTION will swap the per-artist API traversal for the MusicBrainz
- * *canonical bulk dump* + ListenBrainz popularity (offline, no rate limits) and
- * emit the same document shape. This is the eyeball, not the pipeline.
+ * The production builder now exists — `@p2p-songs/catalog-builder`'s `build`
+ * command processes the MusicBrainz *canonical bulk dump* offline (no rate
+ * limits, popularity-scoped) and emits this same document shape. This script is
+ * retained only as a small, network-light *eyeball* for data-quality spot checks.
  *
  *   cd packages/musicmeta && node scripts/build-sample.mjs
  */

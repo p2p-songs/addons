@@ -7,15 +7,19 @@
  *
  * Credentials come from the environment, never the command line or the repo.
  * Commands:
+ *   build <canonical.csv> [out.ndjson]  curate top-N-by-popularity from the
+ *                                       MusicBrainz canonical dump → NDJSON
  *   publish <file.ndjson>   upload an immutable snapshot + repoint latest.json
  *   fetch [out.ndjson]      download latest, verify checksum, write it out
+ *   import                  fetch latest from R2 → zero-downtime reindex into Meili
  *   versions                list snapshot keys, newest first
  *   rollback <key>          repoint latest.json at an existing snapshot
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { S3ObjectStore, FileObjectStore } from "./store.js";
-import { publishDataset, fetchLatest, listVersions, rollbackTo } from "./dataset.js";
+import { publishDataset, fetchLatest, listVersions, rollbackTo, computeStats } from "./dataset.js";
 import { importToMeili, type MeiliTarget } from "./meili-import.js";
+import { buildCatalog } from "./build.js";
 
 function meiliFromEnv(): MeiliTarget {
   const url = process.env.MEILI_URL;
@@ -48,6 +52,22 @@ const [cmd, arg, arg2] = process.argv.slice(2);
 
 try {
   switch (cmd) {
+    case "build": {
+      // Curate the golden NDJSON from a local MusicBrainz canonical-dump CSV.
+      // The Action extracts the CSV first: `curl … | tar --zstd -x …`.
+      if (!arg) throw new Error("usage: build <canonical_musicbrainz_data.csv> [out.ndjson]");
+      const out = arg2 ?? "catalog.ndjson";
+      const limit = Number(process.env.CATALOG_LIMIT ?? 250_000);
+      console.error(`building from ${arg} (top ${limit.toLocaleString()} recordings by popularity)…`);
+      const ndjson = await buildCatalog(arg, {
+        limit,
+        onProgress: (n) => console.error(`  scanned ${n.toLocaleString()} rows`),
+      });
+      writeFileSync(out, ndjson);
+      const { records, counts } = computeStats(ndjson);
+      console.error(`wrote ${out} — ${records.toLocaleString()} docs`, counts);
+      break;
+    }
     case "publish": {
       if (!arg) throw new Error("usage: publish <file.ndjson>");
       const manifest = await publishDataset(storeFromEnv(), readFileSync(arg, "utf8"));
@@ -93,7 +113,7 @@ try {
       break;
     }
     default:
-      console.error("commands: publish <file> | fetch [out] | versions | rollback <key>");
+      console.error("commands: build <csv> [out] | publish <file> | fetch [out] | import | versions | rollback <key>");
       process.exitCode = 1;
   }
 } catch (err) {

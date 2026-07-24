@@ -12,3 +12,13 @@ export {
 } from "./dataset.js";
 export type { MeiliTarget, ImportResult } from "./meili-import.js";
 export { importToMeili } from "./meili-import.js";
+export type { CatalogDoc, CanonicalRow, DocType, BuildOptions } from "./build.js";
+export {
+  buildCatalog,
+  docsFromRows,
+  serializeNdjson,
+  parseCsvLine,
+  rowFromCsvLine,
+  parseArtistMbids,
+  TopN,
+} from "./build.js";

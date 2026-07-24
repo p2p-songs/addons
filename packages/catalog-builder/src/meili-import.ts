@@ -13,10 +13,19 @@
  * the NDJSON in, and swaps.
  */
 
-/** The search settings validated against real data (see musicmeta `meili.ts`). */
+/**
+ * The search settings validated against real data (see musicmeta `meili.ts`).
+ *
+ * `score` (the canonical dump's popularity/priority) is sortable and appended to
+ * the ranking rules as a final tiebreaker: relevance still decides first, but
+ * among equally-relevant hits the more popular one wins — so "justin bieber"
+ * surfaces the popular artist and songs rather than an obscure like-named entry.
+ */
 const SETTINGS = {
   searchableAttributes: ["searchtext", "name", "description"],
   filterableAttributes: ["type"],
+  sortableAttributes: ["score"],
+  rankingRules: ["words", "typo", "proximity", "attribute", "sort", "exactness", "score:desc"],
 };
 
 export interface MeiliTarget {

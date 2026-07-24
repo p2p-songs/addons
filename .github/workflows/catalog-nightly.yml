@@ -1,0 +1,83 @@
+# Nightly metadata-plane build: curate the golden catalogue from the MusicBrainz
+# canonical dump and publish a versioned, checksummed NDJSON snapshot to R2.
+#
+# This is the **build + publish** half of the pipeline (CATALOG_PIPELINE.md). It
+# runs off the serving box because it processes a multi-GB dump and only needs R2
+# credentials. The **import** half (R2 → zero-downtime reindex into Meilisearch)
+# runs inside Railway, where it can reach the private Meili — see the deploy docs.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   R2_ENDPOINT           https://<account>.r2.cloudflarestorage.com
+#   R2_ACCESS_KEY_ID      R2 API token access key
+#   R2_SECRET_ACCESS_KEY  R2 API token secret
+# Optional repo variable:
+#   R2_BUCKET             defaults to songs-catalog
+#   CATALOG_LIMIT         top-N recordings by popularity (default 250000)
+
+name: catalog-nightly
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # 04:00 UTC daily (the dump refreshes on the 1st & 15th)
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "top-N recordings by popularity"
+        required: false
+        default: "250000"
+
+concurrency:
+  group: catalog-nightly
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: packages/catalog-builder
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.6.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install & build catalog-builder
+        run: |
+          pnpm install --filter @p2p-songs/catalog-builder... --frozen-lockfile
+          pnpm --filter @p2p-songs/catalog-builder build
+
+      - name: Fetch & extract the latest canonical dump CSV
+        run: |
+          set -euo pipefail
+          BASE=https://data.metabrainz.org/pub/musicbrainz/canonical_data
+          DUMP=$(curl -sL "$BASE/" \
+            | grep -oE 'musicbrainz-canonical-dump-[0-9]{8}-[0-9]{6}' \
+            | sort -u | tail -1)
+          echo "latest dump: $DUMP"
+          # Stream the ~2GB tarball straight through zstd|tar and keep only the one
+          # CSV we need — never storing the tarball on disk.
+          curl -sL "$BASE/$DUMP/$DUMP.tar.zst" \
+            | tar --use-compress-program=unzstd -x \
+                  --wildcards '*/canonical/canonical_musicbrainz_data.csv' \
+                  --strip-components=2
+          ls -lh canonical_musicbrainz_data.csv
+
+      - name: Build the curated golden NDJSON
+        env:
+          CATALOG_LIMIT: ${{ github.event.inputs.limit || vars.CATALOG_LIMIT || '250000' }}
+        run: node dist/cli.js build canonical_musicbrainz_data.csv catalog.ndjson
+
+      - name: Publish the versioned snapshot to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'songs-catalog' }}
+        run: node dist/cli.js publish catalog.ndjson
