@@ -78,22 +78,37 @@ export class MeiliSearchIndex implements SearchIndex {
     limit: number,
     signal?: AbortSignal,
   ): Promise<MetaPreview[]> {
-    await this.ensureReady();
-    const body = await this.req<{ hits: CatalogDoc[] }>(
-      "POST",
-      `/indexes/${this.index}/search`,
-      { q: query, limit, filter: `type = ${JSON.stringify(type)}` },
-      signal,
-    );
-    const out: MetaPreview[] = [];
-    for (const hit of body.hits) {
-      // Re-validate against the protocol on the way out: the index is a cache of
-      // our own writes, but a schema-checked boundary means a stray/legacy
-      // document can never become a malformed catalog response.
-      const parsed = metaPreviewSchema.safeParse(docToPreview(hit));
-      if (parsed.success) out.push(parsed.data);
+    // At most one retry: if the index has gone missing under us (Meili was
+    // wiped/restarted), the first attempt 404s, we drop the stale readiness, and
+    // the second attempt re-creates it. Without this, a running process that had
+    // already initialized would search a vanished index forever and silently
+    // serve nothing — the accelerator must self-heal, not need a redeploy.
+    for (let attempt = 0; ; attempt++) {
+      await this.ensureReady();
+      try {
+        const body = await this.req<{ hits: CatalogDoc[] }>(
+          "POST",
+          `/indexes/${this.index}/search`,
+          { q: query, limit, filter: `type = ${JSON.stringify(type)}` },
+          signal,
+        );
+        const out: MetaPreview[] = [];
+        for (const hit of body.hits) {
+          // Re-validate against the protocol on the way out: the index is a cache
+          // of our own writes, but a schema-checked boundary means a stray/legacy
+          // document can never become a malformed catalog response.
+          const parsed = metaPreviewSchema.safeParse(docToPreview(hit));
+          if (parsed.success) out.push(parsed.data);
+        }
+        return out;
+      } catch (err) {
+        if (attempt === 0 && isIndexMissing(err)) {
+          this.ready = undefined;
+          continue;
+        }
+        throw err;
+      }
     }
-    return out;
   }
 
   async upsert(items: readonly MetaPreview[]): Promise<void> {
@@ -103,9 +118,20 @@ export class MeiliSearchIndex implements SearchIndex {
     await this.req("PUT", `/indexes/${this.index}/documents`, docs);
   }
 
-  /** Create the index and apply settings exactly once per process. */
+  /**
+   * Create the index and apply settings once, memoized. A *failed* initialize
+   * clears the memo so the next call retries — otherwise a transient Meili blip
+   * during the first request would disable the accelerator for the whole
+   * process lifetime.
+   */
   private ensureReady(): Promise<void> {
-    return (this.ready ??= this.initialize());
+    if (!this.ready) {
+      this.ready = this.initialize().catch((err) => {
+        this.ready = undefined;
+        throw err;
+      });
+    }
+    return this.ready;
   }
 
   private async initialize(): Promise<void> {
@@ -148,10 +174,26 @@ export class MeiliSearchIndex implements SearchIndex {
       ...(signal ? { signal } : {}),
     });
     if (!res.ok) {
-      throw new Error(`meilisearch ${method} ${path} → ${res.status}`);
+      throw new MeiliError(`meilisearch ${method} ${path} → ${res.status}`, res.status);
     }
     return (await res.json()) as T;
   }
+}
+
+/** A non-2xx Meilisearch response, carrying the status so callers can react. */
+class MeiliError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "MeiliError";
+  }
+}
+
+/** True when the failure is Meilisearch reporting the index does not exist. */
+function isIndexMissing(err: unknown): boolean {
+  return err instanceof MeiliError && err.status === 404;
 }
 
 function sanitizeDocId(id: string): string {
