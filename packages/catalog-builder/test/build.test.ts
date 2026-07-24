@@ -8,7 +8,7 @@ import {
   type CanonicalRow,
 } from "../src/build.js";
 import type { ArtistPopularity } from "../src/listenbrainz.js";
-import { fetchTopArtists } from "../src/listenbrainz.js";
+import { fetchTopArtists, fetchTopRecordings } from "../src/listenbrainz.js";
 
 describe("parseCsvLine", () => {
   it("splits plain fields", () => {
@@ -119,6 +119,16 @@ describe("docsFromRows (popularity-scoped join)", () => {
     expect(lines).toHaveLength(4); // 1 artist + 1 album + 2 tracks
     expect(() => lines.forEach((l) => JSON.parse(l))).not.toThrow();
   });
+
+  it("adds per-recording popularity on top of the artist's base score", () => {
+    const boost = new Map<string, number>([["rec-1", 400]]); // the studio hit
+    const docs = docsFromRows(rows, scope, boost);
+    const hit = docs.find((d) => d.id === "mbid:recording:rec-1")!;
+    const cut = docs.find((d) => d.id === "mbid:recording:rec-2")!;
+    expect(hit.score).toBe(5400); // 5000 artist + 400 recording
+    expect(cut.score).toBe(5000); // unboosted album cut
+    expect(hit.score).toBeGreaterThan(cut.score); // hit floats above the cut
+  });
 });
 
 describe("fetchTopArtists", () => {
@@ -157,5 +167,25 @@ describe("fetchTopArtists", () => {
     const out = await fetchTopArtists({ limit: 1, pageSize: 2, delayMs: 0, fetchImpl });
     expect(out.size).toBe(1);
     expect([...out.keys()]).toEqual([AAAA]);
+  });
+});
+
+describe("fetchTopRecordings", () => {
+  it("returns recording_mbid → listen count, skipping rows without an mbid", async () => {
+    const fetchImpl = (async (url: string) => {
+      const offset = Number(new URL(url).searchParams.get("offset") ?? "0");
+      const recordings =
+        offset === 0
+          ? [
+              { recording_mbid: "rec-1", listen_count: 900 },
+              { listen_count: 1 }, // no mbid → skipped
+            ]
+          : [];
+      return new Response(JSON.stringify({ payload: { recordings } }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const out = await fetchTopRecordings({ limit: 100, pageSize: 2, delayMs: 0, fetchImpl });
+
+    expect([...out.entries()]).toEqual([["rec-1", 900]]);
   });
 });

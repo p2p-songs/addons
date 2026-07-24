@@ -138,11 +138,14 @@ export function parseArtistMbids(raw: string): string[] {
  * Artist docs come straight from the popularity `scope` (clean ListenBrainz names
  * and listen counts, one per scoped artist). Album/track docs come from the
  * canonical `rows` whose **primary** artist is in scope, deduplicated per entity.
- * Every doc's `score` is its artist's listen count.
+ * A doc's base `score` is its artist's listen count; a track that is itself in the
+ * `recordingPopularity` map gets that added on top, so the songs people play most
+ * outrank an artist's own album cuts / live / remix versions.
  */
 export function docsFromRows(
   rows: Iterable<CanonicalRow>,
   scope: Map<string, ArtistPopularity>,
+  recordingPopularity: Map<string, number> = new Map(),
 ): CatalogDoc[] {
   const albums = new Map<string, CatalogDoc>();
   const tracks = new Map<string, CatalogDoc>();
@@ -167,7 +170,7 @@ export function docsFromRows(
         description: credit,
         album: row.releaseName,
         searchtext: `${credit} ${row.releaseName} ${row.recordingName}`,
-        score,
+        score: score + (recordingPopularity.get(row.recordingMbid) ?? 0),
         ...(row.releaseMbid ? { poster: coverUrl(row.releaseMbid) } : {}),
       });
     }
@@ -203,6 +206,8 @@ export function serializeNdjson(docs: CatalogDoc[]): string {
 export interface BuildOptions {
   /** The popularity scope — top artists keyed by MBID (from `fetchTopArtists`). */
   artists: Map<string, ArtistPopularity>;
+  /** Per-song popularity boost — `recording_mbid → listens` (from `fetchTopRecordings`). */
+  recordingPopularity?: Map<string, number>;
   /** Progress callback, invoked every `progressEvery` rows scanned. */
   onProgress?: (rowsScanned: number, kept: number) => void;
   progressEvery?: number;
@@ -236,5 +241,5 @@ export async function buildCatalog(csvPath: string, opts: BuildOptions): Promise
   }
   opts.onProgress?.(scanned, kept.length);
 
-  return serializeNdjson(docsFromRows(kept, opts.artists));
+  return serializeNdjson(docsFromRows(kept, opts.artists, opts.recordingPopularity));
 }

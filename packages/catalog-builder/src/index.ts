@@ -21,5 +21,5 @@ export {
   rowFromCsvLine,
   parseArtistMbids,
 } from "./build.js";
-export type { ArtistPopularity, FetchTopArtistsOptions } from "./listenbrainz.js";
-export { fetchTopArtists } from "./listenbrainz.js";
+export type { ArtistPopularity, FetchTopArtistsOptions, FetchTopRecordingsOptions } from "./listenbrainz.js";
+export { fetchTopArtists, fetchTopRecordings } from "./listenbrainz.js";

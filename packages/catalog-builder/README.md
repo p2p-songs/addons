@@ -44,8 +44,11 @@ node dist/cli.js rollback <key>         repoint latest.json at an existing snaps
   keeps only the rows whose primary artist is in that scope, giving each popular
   artist's whole catalogue with no per-artist API calls.
 
-Each document's `score` is its artist's listen count, which `import` wires as Meili's
-final ranking tiebreaker (relevance first, popularity breaks ties). Albums/tracks get
+Each document's base `score` is its artist's listen count, which `import` wires as
+Meili's final ranking tiebreaker (relevance first, popularity breaks ties). A track
+that is also among ListenBrainz's **top recordings** (`CATALOG_RECORDING_LIMIT`,
+default 1000) gets that song's listens added on top — the per-song boost that floats
+a studio hit above the same artist's live/acoustic/remix versions. Albums/tracks get
 a Cover Art Archive poster from their canonical release. (The dump's own `score`
 column is **not** a popularity signal — it behaves like a row ordinal — which is why
 the listen-count join exists.) Get the CSV with:
@@ -59,8 +62,9 @@ curl -sL "$BASE/$DUMP/$DUMP.tar.zst" \
 ```
 
 `import` builds a `<index>__staging` index, applies the validated search settings,
-streams the dataset in, then **atomically swaps** it with the live index — so the
-live catalogue is never half-populated and removed songs actually disappear.
+streams the dataset in (**batched** — Meili caps a payload at ~95 MiB and the full
+catalogue is hundreds of MB), then **atomically swaps** it with the live index — so
+the live catalogue is never half-populated and removed songs actually disappear.
 
 The nightly build+publish is automated in
 [`.github/workflows/catalog-nightly.yml`](../../.github/workflows/catalog-nightly.yml)
@@ -96,6 +100,6 @@ handoff between the two halves. See `docs/CATALOG_PIPELINE.md` → "Where it run
 Storage + import proven end-to-end against real R2 + Meili. The production `build`
 command over the MusicBrainz canonical bulk dump is implemented and replaces the
 per-artist API prototype (`../musicmeta/scripts/build-sample.mjs`, kept only as a
-small eyeball tool). Nightly build+publish is wired as a GitHub Action. 22 tests.
+small eyeball tool). Nightly build+publish is wired as a GitHub Action. 21 tests.
 
 Build: `pnpm build` · Test: `pnpm test` · Typecheck: `pnpm typecheck`.

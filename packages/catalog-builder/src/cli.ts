@@ -20,7 +20,7 @@ import { S3ObjectStore, FileObjectStore } from "./store.js";
 import { publishDataset, fetchLatest, listVersions, rollbackTo, computeStats } from "./dataset.js";
 import { importToMeili, type MeiliTarget } from "./meili-import.js";
 import { buildCatalog } from "./build.js";
-import { fetchTopArtists } from "./listenbrainz.js";
+import { fetchTopArtists, fetchTopRecordings } from "./listenbrainz.js";
 
 function meiliFromEnv(): MeiliTarget {
   const url = process.env.MEILI_URL;
@@ -68,9 +68,18 @@ try {
         ...(process.env.LISTENBRAINZ_URL ? { baseUrl: process.env.LISTENBRAINZ_URL } : {}),
         onProgress: (n) => console.error(`  ${n.toLocaleString()} artists`),
       });
-      console.error(`scoped to ${artists.size.toLocaleString()} artists; scanning ${arg}…`);
+      console.error(`fetching top recordings (per-song popularity boost)…`);
+      const recordingPopularity = await fetchTopRecordings({
+        limit: Number(process.env.CATALOG_RECORDING_LIMIT ?? 1000),
+        range,
+        ...(process.env.LISTENBRAINZ_URL ? { baseUrl: process.env.LISTENBRAINZ_URL } : {}),
+      });
+      console.error(
+        `scoped to ${artists.size.toLocaleString()} artists (+${recordingPopularity.size.toLocaleString()} boosted songs); scanning ${arg}…`,
+      );
       const ndjson = await buildCatalog(arg, {
         artists,
+        recordingPopularity,
         onProgress: (n, kept) => console.error(`  scanned ${n.toLocaleString()} rows, kept ${kept.toLocaleString()}`),
       });
       writeFileSync(out, ndjson);

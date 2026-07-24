@@ -36,6 +36,12 @@ export interface MeiliTarget {
   index?: string;
   /** Bound on any single task wait, ms (default 10 min — a full import can be large). */
   taskTimeoutMs?: number;
+  /**
+   * Documents per upload request (default 50 000). Meilisearch caps a single
+   * payload at ~95 MiB, and the full catalogue is hundreds of MB, so the NDJSON
+   * is uploaded in batches — a value that keeps each batch well under the cap.
+   */
+  batchDocs?: number;
 }
 
 export interface ImportResult {
@@ -113,6 +119,7 @@ export async function importToMeili(
 ): Promise<ImportResult> {
   const index = target.index ?? "catalog";
   const staging = `${index}__staging`;
+  const batchDocs = target.batchDocs ?? 50_000;
   const m = new Meili(target.url, target.apiKey, target.taskTimeoutMs ?? 600_000);
 
   // Fresh staging index (drop any leftover from a previous interrupted run).
@@ -120,8 +127,15 @@ export async function importToMeili(
   log(`creating staging index ${staging}`);
   await m.wait((await m.createIndex(staging)).taskUid);
   await m.wait((await m.updateSettings(staging)).taskUid);
-  log(`importing documents…`);
-  await m.wait((await m.addNdjson(staging, ndjson)).taskUid);
+
+  // Upload in batches: a full catalogue is hundreds of MB and Meili caps a single
+  // payload at ~95 MiB, so one addNdjson of the whole file 413s.
+  const lines = ndjson.split("\n").filter((l) => l.length > 0);
+  for (let i = 0; i < lines.length; i += batchDocs) {
+    const batch = lines.slice(i, i + batchDocs).join("\n") + "\n";
+    await m.wait((await m.addNdjson(staging, batch)).taskUid);
+    log(`imported ${Math.min(i + batchDocs, lines.length).toLocaleString()} / ${lines.length.toLocaleString()}`);
+  }
 
   // Swap needs both indexes to exist; create the live one empty on first ever run.
   if (!(await m.indexExists(index))) await m.wait((await m.createIndex(index)).taskUid);

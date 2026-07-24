@@ -93,3 +93,54 @@ export async function fetchTopArtists(opts: FetchTopArtistsOptions): Promise<Map
   }
   return out;
 }
+
+interface SitewideRecordingRow {
+  recording_mbid?: string | null;
+  listen_count?: number;
+}
+
+export interface FetchTopRecordingsOptions {
+  /** How many top recordings to fetch (the sitewide stats cap at ~1000). */
+  limit: number;
+  baseUrl?: string;
+  range?: string;
+  pageSize?: number;
+  delayMs?: number;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Fetch the top recordings by all-time listens as `recording_mbid → listen count`.
+ * This is a **per-song** popularity signal used to break the within-artist tie: all
+ * of an artist's tracks share the artist's listen count as their base score, so a
+ * boost for the songs people actually play the most is what floats the studio hit
+ * above its own live/acoustic/remix versions (the canonical dump keeps all of them).
+ * The sitewide endpoint caps at ~1000, so only the very top songs are boosted —
+ * which is exactly the high-traffic search set.
+ */
+export async function fetchTopRecordings(opts: FetchTopRecordingsOptions): Promise<Map<string, number>> {
+  const base = (opts.baseUrl ?? DEFAULT_BASE).replace(/\/+$/, "");
+  const range = opts.range ?? "all_time";
+  const pageSize = Math.min(opts.pageSize ?? 1000, 1000);
+  const delayMs = opts.delayMs ?? 250;
+  const doFetch = opts.fetchImpl ?? fetch;
+
+  const out = new Map<string, number>();
+  for (let offset = 0; out.size < opts.limit; offset += pageSize) {
+    const url = `${base}/1/stats/sitewide/recordings?count=${pageSize}&offset=${offset}&range=${range}`;
+    const res = await doFetch(url);
+    if (!res.ok) throw new Error(`listenbrainz ${url} → ${res.status}`);
+    const body = (await res.json()) as { payload?: { recordings?: SitewideRecordingRow[] } };
+    const rows = body.payload?.recordings ?? [];
+    if (rows.length === 0) break;
+    for (const row of rows) {
+      if (out.size >= opts.limit) break;
+      const mbid = row.recording_mbid;
+      if (!mbid || out.has(mbid)) continue;
+      out.set(mbid, row.listen_count ?? 0);
+    }
+    if (rows.length < pageSize) break;
+    if (delayMs > 0) await sleep(delayMs);
+  }
+  return out;
+}
