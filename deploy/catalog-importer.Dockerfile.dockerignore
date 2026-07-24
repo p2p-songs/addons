@@ -1,0 +1,14 @@
+# BuildKit reads this per-Dockerfile ignore file automatically. Context is the
+# `addons` repo root. Keep host build junk out so the image installs cleanly.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+**/.git
+**/.DS_Store
+**/.env
+**/.env.*
+.github/
+.claude/
+.pnpm-store/
+deploy/

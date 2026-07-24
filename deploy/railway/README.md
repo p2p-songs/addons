@@ -1,17 +1,23 @@
 # Railway deployment — musicmeta + Meilisearch
 
-Two services in one Railway project: the stateless `musicmeta` addon (public)
-and a stateful Meilisearch (private, with a volume). Cloudflare sits in front of
-`musicmeta` — see [`../cloudflare/README.md`](../cloudflare/README.md).
+Three services in one Railway project: the stateless `musicmeta` addon (public),
+a stateful Meilisearch (private, with a volume), and a scheduled `catalog-importer`
+(private, cron) that pulls the nightly golden dataset from R2 into Meilisearch.
+Cloudflare sits in front of `musicmeta` — see
+[`../cloudflare/README.md`](../cloudflare/README.md).
 
 ```
-Cloudflare (free) ──▶ musicmeta service (public)
-                          │  private networking
-                          ▼
-                      meilisearch service (volume, never public)
-                          │
-                          └─▶ MusicBrainz (cold miss only)
+  R2 (golden NDJSON, published nightly off-box by the catalog-nightly Action)
+        │  fetch + verify
+        ▼
+  catalog-importer service (cron, private) ──▶ meilisearch service (volume, never public)
+                                                    ▲  private networking
+Cloudflare (free) ──▶ musicmeta service (public) ───┘  serves search from Meili only
 ```
+
+MusicBrainz is **not** in this picture at request time — the catalogue is built
+offline and shipped in via R2 (see `.github/docs/CATALOG_PIPELINE.md`). Meili is
+the curated store musicmeta serves from, so the importer is what keeps it current.
 
 ## The one prerequisite: getting the SDK into the image
 
@@ -60,17 +66,52 @@ trivial Dockerfile. Until then, use A.
 - **Volume:** attach one mounted at `/meili_data`. This is the whole reason
   Meilisearch can't be serverless — it needs a persistent disk.
 - **Variables:** `MEILI_MASTER_KEY` (long random), `MEILI_ENV=production`,
-  `MEILI_NO_ANALYTICS=true`, `MEILI_SCHEDULE_SNAPSHOT=86400`.
+  `MEILI_NO_ANALYTICS=true`, `MEILI_SCHEDULE_SNAPSHOT=86400`, and
+  **`MEILI_MAX_INDEXING_MEMORY=256Mb`** — required: Meilisearch sizes its worker
+  pool to the host CPU count, so an unbounded indexing spike OOM-kills it into a
+  restart loop (seen live on a small Railway service). Give it ≥1 GB RAM.
 - **Networking:** **do not** give it a public domain. It's reachable only over
-  `*.railway.internal` from musicmeta.
+  `*.railway.internal` from the other two services.
+
+## Service 3 — catalog-importer (private, cron)
+
+The runtime half of the pipeline: fetch the latest golden NDJSON from R2, verify
+its checksum, and zero-downtime-reindex it into Meilisearch. It runs on a schedule
+inside the project so it can reach `meilisearch.railway.internal` (Meili is never
+public, so this can't run from the GitHub Action).
+
+- **Source:** the image built from
+  [`../catalog-importer.Dockerfile`](../catalog-importer.Dockerfile). Unlike
+  musicmeta it has **no SDK `link:` dependency**, so it builds from the `addons`
+  repo alone — Railway's native builder can do it, or push a prebuilt image:
+  ```sh
+  # from the addons repo root
+  docker build -f deploy/catalog-importer.Dockerfile -t ghcr.io/<you>/catalog-importer:latest .
+  docker push ghcr.io/<you>/catalog-importer:latest
+  ```
+- **Cron schedule:** set the service's cron to run **after** the nightly build
+  (the Action runs 04:00 UTC), e.g. `30 4 * * *`. Railway runs the container to
+  completion and it exits — the `import` command is one-shot.
+- **Variables:**
+  - `MEILI_URL=http://meilisearch.railway.internal:7700`, `MEILI_API_KEY`,
+    `MEILI_INDEX=catalog`.
+  - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
+    `R2_BUCKET=songs-catalog` — R2 **read** credentials for `fetch`.
+- **Networking:** no public domain.
+
+> A leaner alternative avoids a third service entirely: have `musicmeta` itself
+> notice `latest.json`'s sha256 changed and self-import. We keep it separate so
+> the S3 client stays out of the runtime addon and imports are observable as their
+> own job — but the option is open if you'd rather run two services.
 
 ## Backups
 
-Railway persists the volume, but ship snapshots off-box anyway (they're ~30 MB
-for millions of docs). Either run [`../meilisearch/backup.sh`](../meilisearch/backup.sh)
-from a small Railway cron service, or accept that the index is derived data and a
-loss just means a slow re-warm from MusicBrainz. See
-[`../meilisearch/README.md`](../meilisearch/README.md).
+The **golden NDJSON in R2 is the system of record** — the Meili index is derived
+and fully rebuildable from it (`catalog-builder import` against any fresh Meili).
+So Railway's lack of managed backups doesn't matter: if Meili/Railway die, stand
+Meili up anywhere and re-run the importer. Meili's own scheduled snapshots (→ R2
+via [`../meilisearch/backup.sh`](../meilisearch/backup.sh)) are just a fast-restore
+convenience on top of that. See [`../meilisearch/README.md`](../meilisearch/README.md).
 
 ## Rough cost
 

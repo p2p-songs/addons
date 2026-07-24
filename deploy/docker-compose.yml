@@ -48,5 +48,31 @@ services:
       # Loopback only — Cloudflare (Tunnel/proxy) is the sole public entry.
       - "127.0.0.1:7002:7002"
 
+  # One-shot: fetch the latest golden dataset from R2 and zero-downtime-reindex it
+  # into the private Meilisearch above. Not started by `up` (it lives behind a
+  # profile); run it after a new dataset is published, or on a host cron:
+  #
+  #   R2_ACCOUNT_ID=… R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… \
+  #     docker compose --profile import run --rm importer
+  #
+  # On Railway this is a separate service in the same project (so it can reach
+  # meilisearch.railway.internal) with a cron schedule — see railway/README.md.
+  importer:
+    profiles: ["import"]
+    build:
+      context: ..                                 # the addons repo root
+      dockerfile: deploy/catalog-importer.Dockerfile
+    depends_on:
+      - meilisearch
+    environment:
+      MEILI_URL: http://meilisearch:7700
+      MEILI_API_KEY: ${MEILI_MASTER_KEY:?}
+      MEILI_INDEX: ${MEILI_INDEX:-catalog}
+      # R2 read credentials for `fetch` — passed through from the host env.
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:?set R2_ACCOUNT_ID to fetch the dataset}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:?}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:?}
+      R2_BUCKET: ${R2_BUCKET:-songs-catalog}
+
 volumes:
   meili_data:

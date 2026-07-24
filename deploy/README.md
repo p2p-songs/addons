@@ -7,17 +7,21 @@ construction (`.github/docs/DEPLOYMENT.md` → "The metadata plane"). It is *not
 the stream plane — musicmeta names no sources and holds no user credential.
 
 ```
+R2 (golden NDJSON, published nightly off-box) ──▶ catalog-importer (cron)
+                                                        │ zero-downtime reindex
+                                                        ▼
 players ──▶ Cloudflare (free)  ──▶  musicmeta  ──▶  Meilisearch (private)
-             edge cache + DDoS        (public)  ──▶  MusicBrainz (cold miss only)
+             edge cache + DDoS        (public)      serves search from Meili only
              + bot + rate limit
 ```
 
-Three pieces, three shapes:
+Four pieces, four shapes:
 
 | Piece | Shape | Where |
 |---|---|---|
 | **musicmeta** | stateless HTTP addon | any container host; scale-to-zero friendly |
 | **Meilisearch** | stateful, always-on, volume | VPS/GCE box, or a Railway service **with a volume** — never serverless |
+| **catalog-importer** | one-shot cron job | same private network as Meili; runs after the nightly build |
 | **Cloudflare** | edge | free plan, in front of musicmeta |
 
 ## Pick a path
@@ -25,8 +29,8 @@ Three pieces, three shapes:
 - **One box (Tier 0, ~€5–12/mo)** — `docker compose up` on a VPS or a GCE VM,
   both services side by side, Cloudflare in front. See
   [`docker-compose.yml`](./docker-compose.yml). Cheapest, most control.
-- **Managed (Railway, ~$15–25/mo)** — two Railway services (musicmeta public +
-  Meilisearch with a volume), Cloudflare in front. See
+- **Managed (Railway, ~$15–25/mo)** — three Railway services (musicmeta public +
+  Meilisearch with a volume + the catalog-importer cron), Cloudflare in front. See
   [`railway/README.md`](./railway/README.md). Least ops.
 - **Managed Meilisearch** — Meilisearch Cloud for the stateful half + musicmeta
   on Cloud Run/Railway, if you'd rather not run Meilisearch at all.
@@ -43,13 +47,19 @@ curl -s http://127.0.0.1:7002/manifest.json | head        # liveness
 Then front `:7002` with Cloudflare ([`cloudflare/README.md`](./cloudflare/README.md))
 and set up snapshots off-box ([`meilisearch/README.md`](./meilisearch/README.md)).
 
-## The accelerator is never a dependency
+## Meilisearch is the curated store (not an accelerator)
 
-If `MEILI_URL` is unset, or Meilisearch is down or slow, `musicmeta` is plain
-MusicBrainz — same happy path, same latency (write-back is fire-and-forget).
-Meilisearch only makes search **faster and better-ranked**; it is never required
-to serve a result. So a Meilisearch outage degrades ranking, it does not take the
-addon down.
+The metadata plane was inverted (see `.github/docs/CATALOG_PIPELINE.md`):
+Meilisearch is now the **curated catalogue musicmeta serves from**, not an
+accelerator in front of live MusicBrainz. MusicBrainz is an *offline* source for
+the nightly build only — it is never in the request path. So Meili is a **required
+store**: if it's empty, the catalogue is empty (there is no live-MB fallback).
+
+That raises the resilience stakes, which is exactly why the golden dataset lives
+in **R2, which you own**, and the index is rebuildable from it in minutes
+(`catalog-builder import` against any fresh Meili). The `catalog-importer` job is
+what keeps Meili current: it fetches the latest R2 snapshot nightly and does a
+zero-downtime swap, so readers always see a complete index.
 
 ## Build prerequisite (know this before Railway's native builder)
 
@@ -63,7 +73,8 @@ detail in [`railway/README.md`](./railway/README.md).
 ## Contents
 
 - [`musicmeta.Dockerfile`](./musicmeta.Dockerfile) — the addon image (parent context)
-- [`docker-compose.yml`](./docker-compose.yml) — Tier 0 full stack
-- [`railway/`](./railway/) — the managed two-service setup
+- [`catalog-importer.Dockerfile`](./catalog-importer.Dockerfile) — the R2→Meili import job (addons context)
+- [`docker-compose.yml`](./docker-compose.yml) — Tier 0 full stack (+ `--profile import`)
+- [`railway/`](./railway/) — the managed three-service setup
 - [`meilisearch/`](./meilisearch/) — config + off-box backups
 - [`cloudflare/`](./cloudflare/) — cache rule, rate limit, bot/DDoS
