@@ -19,6 +19,11 @@ services:
       MEILI_NO_ANALYTICS: "true"
       # A point-in-time snapshot every 24h; backup.sh ships them off-box.
       MEILI_SCHEDULE_SNAPSHOT: "86400"
+      # Cap the memory-hungry indexing phase. Required on memory-constrained
+      # hosts: Meilisearch sizes its worker pool to the host CPU count, so an
+      # unbounded indexing spike OOM-kills it into a restart loop (seen live on a
+      # small Railway service). 256Mb is plenty for musicmeta's tiny batches.
+      MEILI_MAX_INDEXING_MEMORY: "256Mb"
     volumes:
       - meili_data:/meili_data
     # Reachable only from other services on this network — never published.

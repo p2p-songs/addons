@@ -27,6 +27,23 @@ provision by hand — just run Meilisearch with a master key and point
 | `MEILI_ENV` | `production` | enables auth; disables the dev web UI |
 | `MEILI_NO_ANALYTICS` | `true` | no telemetry |
 | `MEILI_SCHEDULE_SNAPSHOT` | `86400` | a snapshot per day, for `backup.sh` to ship off-box |
+| `MEILI_MAX_INDEXING_MEMORY` | `256Mb` | **required on memory-constrained hosts** — see below |
+
+### Memory: bound indexing on small hosts
+
+Meilisearch sizes its worker pool to the host's **CPU count**, so its baseline
+memory varies with wherever the container is scheduled, and an unbounded indexing
+spike can OOM-kill it into a restart loop. This bit us live on a small Railway
+service (it flapped between 24- and 48-worker boots). Two things prevent it:
+
+- Give the service **≥1 GB** memory (or don't cap it below that).
+- Set **`MEILI_MAX_INDEXING_MEMORY=256Mb`** to bound the indexing phase. Our
+  write-back batches are tiny (one search's worth), so this costs nothing and
+  keeps the footprint flat regardless of host CPU count.
+
+musicmeta tolerates a Meilisearch outage (it falls back to MusicBrainz and
+self-heals the index on recovery), but a *flapping* Meili still adds latency
+while connections time out — so keeping it stable matters.
 
 **Never expose Meilisearch to the internet.** It sits on the private network
 behind `musicmeta` (compose network / `*.railway.internal` / VPC). The master key
