@@ -1,0 +1,31 @@
+{
+  "name": "@p2p-songs/catalog-builder",
+  "version": "0.1.0",
+  "description": "Offline pipeline: build the curated golden catalog (NDJSON) from MusicBrainz and publish versioned, checksummed snapshots to S3-compatible storage (Cloudflare R2). Not shipped in the runtime addon.",
+  "type": "module",
+  "bin": {
+    "catalog-builder": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "@p2p-songs/musicbrainz": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}
