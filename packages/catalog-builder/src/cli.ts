@@ -13,7 +13,7 @@
  *   rollback <key>          repoint latest.json at an existing snapshot
  */
 import { readFileSync, writeFileSync } from "node:fs";
-import { S3ObjectStore } from "./store.js";
+import { S3ObjectStore, FileObjectStore } from "./store.js";
 import { publishDataset, fetchLatest, listVersions, rollbackTo } from "./dataset.js";
 
 function storeFromEnv(): S3ObjectStore {
@@ -33,7 +33,7 @@ function storeFromEnv(): S3ObjectStore {
   return new S3ObjectStore({ endpoint, accessKeyId, secretAccessKey, bucket });
 }
 
-const [cmd, arg] = process.argv.slice(2);
+const [cmd, arg, arg2] = process.argv.slice(2);
 
 try {
   switch (cmd) {
@@ -42,6 +42,17 @@ try {
       const manifest = await publishDataset(storeFromEnv(), readFileSync(arg, "utf8"));
       console.error(`published ${manifest.key}`);
       console.error(JSON.stringify(manifest, null, 2));
+      break;
+    }
+    case "stage": {
+      // Write the versioned objects to a local dir (default ./r2-stage) for any
+      // transport to upload. Same manifest/checksum logic as `publish`.
+      if (!arg) throw new Error("usage: stage <file.ndjson> [outDir]");
+      const dir = arg2 ?? "r2-stage";
+      const manifest = await publishDataset(new FileObjectStore(dir), readFileSync(arg, "utf8"));
+      console.error(`staged into ${dir}/`);
+      console.error(`  ${manifest.key}`);
+      console.error(`  latest.json  →  ${JSON.stringify(manifest.counts)}  (${manifest.records} docs)`);
       break;
     }
     case "fetch": {

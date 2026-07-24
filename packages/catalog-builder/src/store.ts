@@ -6,6 +6,8 @@
  * in-memory fake and never needs real credentials, and the concrete S3 client is
  * the only thing that knows about AWS SDK, R2 endpoints, or auth.
  */
+import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
+import { dirname, join, posix, relative, sep } from "node:path";
 import {
   S3Client,
   PutObjectCommand,
@@ -65,5 +67,41 @@ export class S3ObjectStore implements ObjectStore {
       token = res.IsTruncated ? res.NextContinuationToken : undefined;
     } while (token);
     return keys;
+  }
+}
+
+/**
+ * {@link ObjectStore} backed by a local directory — object key ⇄ file path.
+ *
+ * Lets `publishDataset` "stage" the exact bytes that would go to R2 (dated
+ * snapshot + `latest.json`) into a folder, so any transport (wrangler, aws,
+ * rclone) can upload it and the checksum/manifest logic stays in tested code.
+ */
+export class FileObjectStore implements ObjectStore {
+  constructor(private readonly root: string) {}
+
+  async put(key: string, body: Uint8Array): Promise<void> {
+    const path = join(this.root, key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, body);
+  }
+
+  async get(key: string): Promise<Uint8Array> {
+    return new Uint8Array(await readFile(join(this.root, key)));
+  }
+
+  async list(prefix: string): Promise<string[]> {
+    const walk = async (dir: string): Promise<string[]> => {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      const out: string[] = [];
+      for (const e of entries) {
+        const full = join(dir, e.name);
+        if (e.isDirectory()) out.push(...(await walk(full)));
+        // Keys are always POSIX-style regardless of host separator.
+        else out.push(relative(this.root, full).split(sep).join(posix.sep));
+      }
+      return out;
+    };
+    return (await walk(this.root)).filter((k) => k.startsWith(prefix));
   }
 }

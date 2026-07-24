@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import type { ObjectStore } from "../src/store.js";
+import { FileObjectStore } from "../src/store.js";
 import {
   MANIFEST_KEY,
   computeStats,
@@ -90,5 +94,25 @@ describe("golden dataset storage", () => {
 
   it("datedKey is sortable and immutable per minute", () => {
     expect(datedKey(new Date("2026-01-02T09:05:00Z"))).toBe("datasets/catalog-2026-01-02_0905.ndjson");
+  });
+});
+
+describe("FileObjectStore (stage target)", () => {
+  const dirs: string[] = [];
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+  });
+
+  it("stages publishable objects to disk and round-trips through fetchLatest", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "catalog-stage-"));
+    dirs.push(dir);
+    const store = new FileObjectStore(dir);
+
+    const manifest = await publishDataset(store, ndjson, new Date("2026-07-24T03:00:00Z"));
+    expect(await store.list("datasets/")).toEqual([manifest.key]);
+
+    const round = await fetchLatest(store);
+    expect(round.ndjson).toBe(ndjson);
+    expect(round.manifest.counts).toEqual({ artist: 1, album: 1, track: 2 });
   });
 });
