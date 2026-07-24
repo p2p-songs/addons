@@ -30,35 +30,40 @@ authoritative. A bare `mbid:track:` is intentionally not addressable on its own.
 resolves that same `recordingId` to a playable stream. The shared
 `mbid:recording:` identity is the entire contract between the two.
 
-## Search index (optional accelerator)
+## Search — a curated Meilisearch catalogue
 
-MusicBrainz search is a cataloguer's Lucene index, not tuned for how people type:
-no typo tolerance, and a bare artist match outranks a far more specific track
-match — so `"justin bieber baby"` surfaces the *artist*, not the song. Set
-`MEILI_URL` to put a **Meilisearch** index in front of catalog search:
+> **Design evolving (2026-07-24).** Search is moving from a Meilisearch
+> *accelerator in front of live MusicBrainz* to Meilisearch as the **curated
+> catalogue this addon serves from**, built offline. MusicBrainz search is a
+> cataloguer's index that returns parodies/covers for how people actually type
+> (`"justin bieber baby"` surfaced the *artist* or a parody, not the song), and
+> hydrating an index by writing those results back inherited the junk. The fix is
+> curation, not ranking tricks.
 
-- **read-through** — the index answers first, ranked and typo-tolerant;
-- **write-back** — a MusicBrainz miss hydrates the index, so common queries get
-  faster over time.
+**The plane, now:** an offline pipeline
+([`@p2p-songs/catalog-builder`](../catalog-builder)) traverses **official
+release-groups only** — so parodies/live/bootleg can't enter — scoped by
+ListenBrainz popularity and sourced from the MusicBrainz canonical bulk dump (both
+CC0), publishes a versioned golden **NDJSON dataset to R2**, and a runtime import
+does a zero-downtime swap into Meilisearch. `musicmeta` then serves **one unified
+search** over artists/albums/songs, ranked by a stored
+`searchtext = "<artist> <album> <title>"` (which makes "baby", "baby justin
+bieber", and "my world baby" all resolve to the song). Full design:
+[`p2p-songs/.github` — `docs/CATALOG_PIPELINE.md`](https://github.com/p2p-songs/.github/blob/main/docs/CATALOG_PIPELINE.md).
 
-Two things this layer is, by design:
-
-- **Identity only.** It stores exactly a `metaPreview` — entity-typed id, name,
-  poster. **No hashes, no stream sources.** That is what makes it legally inert
-  and safe to host and share (a *stream*-side hash cache is not — that lives
-  per-user inside `stream-debrid`).
-- **An accelerator, never a dependency.** With `MEILI_URL` unset, or if
-  Meilisearch is down or slow, catalog search falls through to MusicBrainz
-  exactly as before. A search never fails, or waits, because caching it did.
+Invariants: **identity only** (`metaPreview` — id/name/poster, no hashes/sources →
+legally inert and shareable, unlike a *stream*-side hash cache which lives
+per-user inside `stream-debrid`); and Meilisearch is now a **required curated
+store**, not an optional accelerator — its resilience is the rebuildable,
+provider-portable R2 dataset, not a live-MusicBrainz fallback. Chosen over
+Typesense (MIT vs GPL-3.0) and Postgres FTS (no typo tolerance).
 
 ```sh
-# Optional: ranked, typo-tolerant, self-warming search.
-MEILI_URL=http://127.0.0.1:7700 MEILI_API_KEY=… PORT=7002 node dist/serve.js
+MEILI_URL=http://127.0.0.1:7700 MEILI_API_KEY=… MEILI_INDEX=catalog PORT=7002 node dist/serve.js
 ```
 
-`MEILI_INDEX` overrides the index name (default `catalog`). Meilisearch is
-chosen over Typesense (MIT vs GPL-3.0 — this addon is meant to be self-hosted)
-and Postgres FTS (no typo tolerance).
+(The transitional `search-index.ts` read-through/write-back adapter is being
+retired as serving moves to Meili-only.)
 
 ## Run
 

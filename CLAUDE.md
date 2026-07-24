@@ -51,6 +51,14 @@ layout under `p2p-songs/` and that the SDK is built (`dist/`). Swap to a
 versioned dependency once the SDK is published at v1. Tooling: TypeScript, zod
 (via the SDK), vitest.
 
+- **`packages/catalog-builder`** (`@p2p-songs/catalog-builder`) — the **offline
+  metadata pipeline**, not shipped in any runtime addon (so it may take heavier
+  deps — the AWS S3 client). Builds the curated golden catalogue (NDJSON) from
+  MusicBrainz, publishes versioned checksummed snapshots to R2 (the system of
+  record), and reindexes Meilisearch with a zero-downtime swap. CLI: `publish |
+  stage | import | fetch | versions | rollback`; creds from env only. See its
+  `README.md` and `../.github/docs/CATALOG_PIPELINE.md`. This is what makes the
+  `musicmeta` search plane a *curated store* rather than a live-MB accelerator.
 - **`packages/musicbrainz`** (`@p2p-songs/musicbrainz`) — a **shared,
   rate-limited MusicBrainz client** consumed by `musicmeta` and `stream-legal`
   (in-workspace `workspace:*` dep). MusicBrainz requires **≤1 req/sec per IP**,
@@ -189,21 +197,25 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   artist's discography as ordinary `mbid:release:` previews, so the player's
   album screen needs no special case.
 
-  **Search index (2026-07-23):** catalog search takes an optional Meilisearch
-  accelerator via the `SearchIndex` port (`search-index.ts`; `MeiliSearchIndex`
-  is a raw-`fetch` adapter, no new dep). **Read-through/write-back** —
-  Meilisearch first (ranked, typo-tolerant), a MusicBrainz miss hydrates it —
-  which is what makes `"justin bieber baby"` find the song, not the artist. Two
-  invariants (don't regress): it holds **identity only** (`metaPreview`: id +
-  name + poster, **no hashes/sources**), so it is legally inert and shareable
-  (contrast the *stream* hash cache §3 forbids sharing — the Buddy/Peer note
-  above); and it is an **accelerator, never a dependency** — `MEILI_URL` unset,
-  or Meili down/slow, and `searchCatalog` is the original direct-MB path, off
-  neither the happy path nor the response latency (write-back is fire-and-forget
-  with a swallowed rejection). `serve.ts` wires it only when `MEILI_URL` is set.
-  Being identity-only is also why `musicmeta` is the addon that may be
-  **default-installed** in the player (neutrality §11 governs the *stream* plane;
-  a default metadata addon is fine) — player wiring is a follow-up increment.
+  **Search — curated Meilisearch catalogue (2026-07-24; supersedes the
+  read-through/write-back accelerator).** The plane was **inverted**: Meilisearch
+  is no longer an accelerator hydrated by write-back from free-text MB (that
+  filled it with parodies and coupled every query to MB's rate budget). It is now
+  the **curated catalogue `musicmeta` serves from**, built *offline* and imported;
+  **MusicBrainz never runs at request time.** An offline pipeline
+  (`@p2p-songs/catalog-builder`) traverses **official release-groups only** (no
+  parodies/live/bootleg), scoped by ListenBrainz popularity + the MB canonical
+  bulk dump (CC0), publishes a versioned golden **NDJSON dataset to R2** (system of
+  record), and a runtime **import** does a zero-downtime swap into Meili. Player
+  gets **one unified search** over artists/albums/songs ranked by a stored
+  `searchtext = "<artist> <album> <title>"`. **Invariants:** still **identity
+  only** (`metaPreview`: id/name/poster, no hashes/sources → legally inert +
+  shareable + default-installable, neutrality §11 governs the *stream* plane); but
+  Meili is now a **required curated store, NOT "accelerator never a dependency"** —
+  no live-MB fallback, resilience comes from the rebuildable R2 dataset. Full
+  design: `../.github/docs/CATALOG_PIPELINE.md`. (The old `search-index.ts` port /
+  `MeiliSearchIndex` write-back adapter is being retired as musicmeta slims to
+  Meili-only serving.)
 
   **Hosting (2026-07-23):** ready-to-run assets in `deploy/` — `docker-compose.yml`
   (musicmeta + a private Meilisearch on one box), a Railway two-service setup,
