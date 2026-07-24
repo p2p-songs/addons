@@ -21,12 +21,13 @@ const mb = new CachedMusicBrainz(new MusicBrainzApi(UA));
 
 // A curated, unambiguously-official popular seed. In production this comes from
 // ListenBrainz popularity (CC0), not a hand list.
-const SEED = [
+const SEED = (process.env.MB_SEED?.split(",").map((s) => s.trim()).filter(Boolean)) ?? [
   "Taylor Swift", "Drake", "The Weeknd", "Beyoncé", "Kendrick Lamar",
   "Billie Eilish", "Ariana Grande", "Ed Sheeran", "Adele", "Bruno Mars",
   "Coldplay", "Daft Punk",
 ];
-const ALBUMS_PER_ARTIST = 6;
+const ALBUMS_PER_ARTIST = Number(process.env.MB_ALBUMS ?? 6);
+const OUT = process.env.MB_OUT ?? "catalog-sample.ndjson";
 
 const sanitize = (id) => id.replace(/[^A-Za-z0-9_-]/g, "_");
 const docs = [];
@@ -59,7 +60,11 @@ for (const name of SEED) {
       add({
         docId: sanitize(recId), id: recId, type: "track",
         name: t.title, description: trackArtist,
-        searchtext: `${trackArtist} ${t.title}`,
+        // Artist + album + title, so a unified search box handles every way a
+        // user types a song: "baby", "baby justin bieber" (any order), and
+        // "my world baby" (album + song). Validated against Meili's ranking with
+        // real data — the album term is what makes the album+song case work.
+        searchtext: `${trackArtist} ${alb.title} ${t.title}`,
         album: alb.title, disc: t.disc, position: t.position,
       });
     }
@@ -70,8 +75,8 @@ for (const name of SEED) {
 const byId = new Map();
 for (const d of docs) if (!byId.has(d.docId)) byId.set(d.docId, d);
 const unique = [...byId.values()];
-writeFileSync("catalog-sample.ndjson", unique.map((d) => JSON.stringify(d)).join("\n") + "\n");
+writeFileSync(OUT, unique.map((d) => JSON.stringify(d)).join("\n") + "\n");
 
 const counts = unique.reduce((m, d) => ((m[d.type] = (m[d.type] || 0) + 1), m), {});
-console.error(`\n=== wrote catalog-sample.ndjson ===`);
+console.error(`\n=== wrote ${OUT} ===`);
 console.error(counts);
