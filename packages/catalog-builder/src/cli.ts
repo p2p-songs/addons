@@ -20,6 +20,7 @@ import { S3ObjectStore, FileObjectStore } from "./store.js";
 import { publishDataset, fetchLatest, listVersions, rollbackTo, computeStats } from "./dataset.js";
 import { importToMeili, type MeiliTarget } from "./meili-import.js";
 import { buildCatalog } from "./build.js";
+import { fetchTopArtists } from "./listenbrainz.js";
 
 function meiliFromEnv(): MeiliTarget {
   const url = process.env.MEILI_URL;
@@ -53,15 +54,24 @@ const [cmd, arg, arg2] = process.argv.slice(2);
 try {
   switch (cmd) {
     case "build": {
-      // Curate the golden NDJSON from a local MusicBrainz canonical-dump CSV.
-      // The Action extracts the CSV first: `curl … | tar --zstd -x …`.
+      // Curate the golden NDJSON: ListenBrainz top artists (popularity scope) ⋈
+      // a local MusicBrainz canonical-dump CSV (content). The Action extracts the
+      // CSV first: `curl … | tar --zstd -x …`.
       if (!arg) throw new Error("usage: build <canonical_musicbrainz_data.csv> [out.ndjson]");
       const out = arg2 ?? "catalog.ndjson";
-      const limit = Number(process.env.CATALOG_LIMIT ?? 250_000);
-      console.error(`building from ${arg} (top ${limit.toLocaleString()} recordings by popularity)…`);
+      const artistLimit = Number(process.env.CATALOG_ARTIST_LIMIT ?? 1000);
+      const range = process.env.LISTENBRAINZ_RANGE ?? "all_time";
+      console.error(`fetching top ${artistLimit.toLocaleString()} artists (ListenBrainz, ${range})…`);
+      const artists = await fetchTopArtists({
+        limit: artistLimit,
+        range,
+        ...(process.env.LISTENBRAINZ_URL ? { baseUrl: process.env.LISTENBRAINZ_URL } : {}),
+        onProgress: (n) => console.error(`  ${n.toLocaleString()} artists`),
+      });
+      console.error(`scoped to ${artists.size.toLocaleString()} artists; scanning ${arg}…`);
       const ndjson = await buildCatalog(arg, {
-        limit,
-        onProgress: (n) => console.error(`  scanned ${n.toLocaleString()} rows`),
+        artists,
+        onProgress: (n, kept) => console.error(`  scanned ${n.toLocaleString()} rows, kept ${kept.toLocaleString()}`),
       });
       writeFileSync(out, ndjson);
       const { records, counts } = computeStats(ndjson);

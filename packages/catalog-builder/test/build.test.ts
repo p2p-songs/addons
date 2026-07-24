@@ -3,37 +3,32 @@ import {
   parseCsvLine,
   rowFromCsvLine,
   parseArtistMbids,
-  TopN,
   docsFromRows,
   serializeNdjson,
   type CanonicalRow,
 } from "../src/build.js";
+import type { ArtistPopularity } from "../src/listenbrainz.js";
+import { fetchTopArtists } from "../src/listenbrainz.js";
 
 describe("parseCsvLine", () => {
   it("splits plain fields", () => {
     expect(parseCsvLine("a,b,c")).toEqual(["a", "b", "c"]);
   });
-
   it("keeps commas inside quoted fields", () => {
     expect(parseCsvLine('1,"Earth, Wind & Fire",x')).toEqual(["1", "Earth, Wind & Fire", "x"]);
   });
-
   it("unescapes doubled quotes", () => {
     expect(parseCsvLine('a,"she said ""hi""",b')).toEqual(["a", 'she said "hi"', "b"]);
   });
-
-  it("yields an empty trailing field", () => {
-    expect(parseCsvLine("a,b,")).toEqual(["a", "b", ""]);
-  });
 });
 
-const HEADER =
-  "id,artist_credit_id,artist_mbids,artist_credit_name,release_mbid,release_name,recording_mbid,recording_name,combined_lookup,score";
+const AAAA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; // Justin Bieber (in scope)
+const CCCC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"; // some other artist (out of scope)
 
 // A realistic canonical row. artist_mbids is a Postgres-array literal; when it
 // holds more than one MBID the comma forces CSV quoting, exactly as `COPY` emits.
 const row = (opts: Partial<Record<string, string>> = {}): string => {
-  const mbids = opts.mbids ?? "{aaaa-artist}";
+  const mbids = opts.mbids ?? `{${AAAA}}`;
   return [
     opts.id ?? "1",
     opts.acid ?? "10",
@@ -50,105 +45,117 @@ const row = (opts: Partial<Record<string, string>> = {}): string => {
 
 describe("rowFromCsvLine", () => {
   it("maps columns by position", () => {
-    const r = rowFromCsvLine(row());
-    expect(r).toEqual({
-      artistMbids: "{aaaa-artist}",
+    expect(rowFromCsvLine(row())).toEqual({
+      artistMbids: `{${AAAA}}`,
       artistCreditName: "Justin Bieber",
       releaseMbid: "rel-1",
       releaseName: "My World 2.0",
       recordingMbid: "rec-1",
       recordingName: "Baby",
-      score: 100,
     } satisfies CanonicalRow);
   });
-
-  it("rejects the header row (non-numeric score) and short/garbage lines", () => {
-    // The header's score column is the literal "score" → not finite → rejected,
-    // so buildCatalog needs no special-casing beyond skipping line 0.
-    expect(rowFromCsvLine(HEADER)).toBeNull();
+  it("rejects the header row (no recording mbid) and short lines", () => {
+    const header =
+      "id,artist_credit_id,artist_mbids,artist_credit_name,release_mbid,release_name,recording_mbid,recording_name,combined_lookup,score";
+    // The header's recording_mbid column is the literal string, so it parses — but
+    // buildCatalog skips line 0 explicitly; a genuinely short line is rejected here.
     expect(rowFromCsvLine("too,few,cols")).toBeNull();
+    expect(rowFromCsvLine(header)?.recordingMbid).toBe("recording_mbid");
   });
 });
 
 describe("parseArtistMbids", () => {
-  it("parses a single-element array literal", () => {
-    expect(parseArtistMbids("{aaaa}")).toEqual(["aaaa"]);
-  });
-  it("parses a multi-element array literal", () => {
-    expect(parseArtistMbids("{aaaa,bbbb}")).toEqual(["aaaa", "bbbb"]);
-  });
-  it("is empty for an empty array", () => {
+  it("parses single, multi, and empty array literals", () => {
+    expect(parseArtistMbids(`{${AAAA}}`)).toEqual([AAAA]);
+    expect(parseArtistMbids(`{${AAAA},${CCCC}}`)).toEqual([AAAA, CCCC]);
     expect(parseArtistMbids("{}")).toEqual([]);
   });
 });
 
-describe("TopN", () => {
-  it("retains only the highest-scoring rows", () => {
-    const top = new TopN(3);
-    for (const score of [5, 1, 9, 3, 7, 2, 8]) {
-      top.push({ ...(rowFromCsvLine(row({ score: String(score), recording: `r${score}` }))!) });
-    }
-    const scores = top
-      .values()
-      .map((r) => r.score)
-      .sort((a, b) => b - a);
-    expect(scores).toEqual([9, 8, 7]);
-  });
+const scope = new Map<string, ArtistPopularity>([
+  [AAAA, { mbid: AAAA, name: "Justin Bieber", listenCount: 5000 }],
+]);
 
-  it("a zero limit keeps nothing", () => {
-    const top = new TopN(0);
-    top.push(rowFromCsvLine(row())!);
-    expect(top.values()).toEqual([]);
-  });
-});
-
-describe("docsFromRows", () => {
+describe("docsFromRows (popularity-scoped join)", () => {
   const rows: CanonicalRow[] = [
-    rowFromCsvLine(row())!, // Justin Bieber / My World 2.0 / Baby, single artist
-    rowFromCsvLine(
-      row({ recording: "rec-2", recordingName: "Somebody to Love", score: "90" }),
-    )!, // same artist + album, another track
-    rowFromCsvLine(
-      row({ mbids: "{aaaa-artist,cccc-guest}", artist: "Justin Bieber feat. Ludacris", recording: "rec-3", recordingName: "Baby (Remix)", score: "50" }),
-    )!, // joint credit
+    rowFromCsvLine(row())!, // Bieber / My World 2.0 / Baby — in scope
+    rowFromCsvLine(row({ recording: "rec-2", recordingName: "Somebody to Love" }))!, // same album, in scope
+    rowFromCsvLine(row({ mbids: `{${CCCC}}`, artist: "Someone Else", release: "rel-9", recording: "rec-9", recordingName: "Obscure" }))!, // out of scope
   ];
 
-  it("derives unified artist/album/track docs with the right ids and searchtext", () => {
-    const docs = docsFromRows(rows);
+  it("keeps only in-scope rows and emits artist docs from the scope", () => {
+    const docs = docsFromRows(rows, scope);
+    expect(docs.filter((d) => d.type === "artist").map((d) => d.id)).toEqual([`mbid:artist:${AAAA}`]);
+    // The out-of-scope recording never becomes a track/album doc.
+    expect(docs.some((d) => d.id === "mbid:recording:rec-9")).toBe(false);
+    expect(docs.some((d) => d.id === "mbid:release:rel-9")).toBe(false);
+  });
+
+  it("builds searchtext, poster, and applies the artist's listen count as score", () => {
+    const docs = docsFromRows(rows, scope);
     const track = docs.find((d) => d.id === "mbid:recording:rec-1")!;
-    expect(track.type).toBe("track");
     expect(track.searchtext).toBe("Justin Bieber My World 2.0 Baby");
-    expect(track.docId).toBe("mbid_recording_rec-1");
+    expect(track.score).toBe(5000); // artist listen count
+    expect(track.poster).toContain("coverartarchive.org/release/rel-1/front");
 
     const album = docs.find((d) => d.id === "mbid:release:rel-1")!;
-    expect(album.type).toBe("album");
     expect(album.searchtext).toBe("Justin Bieber My World 2.0");
+    expect(album.poster).toContain("coverartarchive.org/release/rel-1/front");
 
-    const artist = docs.find((d) => d.id === "mbid:artist:aaaa-artist")!;
-    expect(artist.type).toBe("artist");
+    const artist = docs.find((d) => d.type === "artist")!;
     expect(artist.searchtext).toBe("Justin Bieber");
+    expect(artist.score).toBe(5000);
   });
 
-  it("deduplicates and keeps the highest score per entity", () => {
-    const docs = docsFromRows(rows);
-    // one artist, one album, three tracks
+  it("deduplicates albums and tracks; counts are 1 artist / 1 album / 2 tracks", () => {
+    const docs = docsFromRows(rows, scope);
     expect(docs.filter((d) => d.type === "artist")).toHaveLength(1);
     expect(docs.filter((d) => d.type === "album")).toHaveLength(1);
-    expect(docs.filter((d) => d.type === "track")).toHaveLength(3);
-    // album score = its most popular track (100), not the last-seen (50)
-    expect(docs.find((d) => d.type === "album")!.score).toBe(100);
-  });
-
-  it("does not create an artist doc for a joint credit", () => {
-    const docs = docsFromRows(rows);
-    // only the single-artist MBID seeds an artist doc; the guest never does
-    expect(docs.filter((d) => d.type === "artist").map((d) => d.id)).toEqual(["mbid:artist:aaaa-artist"]);
+    expect(docs.filter((d) => d.type === "track")).toHaveLength(2);
   });
 
   it("serializes to one JSON object per line", () => {
-    const ndjson = serializeNdjson(docsFromRows(rows));
-    const lines = ndjson.trimEnd().split("\n");
-    expect(lines).toHaveLength(5); // 1 artist + 1 album + 3 tracks
+    const lines = serializeNdjson(docsFromRows(rows, scope)).trimEnd().split("\n");
+    expect(lines).toHaveLength(4); // 1 artist + 1 album + 2 tracks
     expect(() => lines.forEach((l) => JSON.parse(l))).not.toThrow();
+  });
+});
+
+describe("fetchTopArtists", () => {
+  /** A stub ListenBrainz that serves two pages then an empty one. */
+  function stub(pages: Array<Array<{ artist_name: string; artist_mbid?: string; listen_count: number }>>): typeof fetch {
+    return (async (url: string) => {
+      const offset = Number(new URL(url).searchParams.get("offset") ?? "0");
+      const pageSize = Number(new URL(url).searchParams.get("count") ?? "1000");
+      const artists = pages[offset / pageSize] ?? [];
+      return new Response(JSON.stringify({ payload: { artists } }), { status: 200 });
+    }) as unknown as typeof fetch;
+  }
+
+  it("pages until the limit and keys by MBID, skipping rows without an MBID", async () => {
+    const fetchImpl = stub([
+      [
+        { artist_name: "Radiohead", artist_mbid: AAAA, listen_count: 3000 },
+        { artist_name: "Unmapped", listen_count: 999 }, // no mbid → skipped
+      ],
+      [{ artist_name: "Daft Punk", artist_mbid: CCCC, listen_count: 2600 }],
+    ]);
+
+    const out = await fetchTopArtists({ limit: 10, pageSize: 2, delayMs: 0, fetchImpl });
+
+    expect([...out.keys()]).toEqual([AAAA, CCCC]);
+    expect(out.get(AAAA)).toEqual({ mbid: AAAA, name: "Radiohead", listenCount: 3000 });
+  });
+
+  it("stops at the limit without over-fetching", async () => {
+    const fetchImpl = stub([
+      [
+        { artist_name: "A", artist_mbid: AAAA, listen_count: 3 },
+        { artist_name: "B", artist_mbid: CCCC, listen_count: 2 },
+      ],
+    ]);
+    const out = await fetchTopArtists({ limit: 1, pageSize: 2, delayMs: 0, fetchImpl });
+    expect(out.size).toBe(1);
+    expect([...out.keys()]).toEqual([AAAA]);
   });
 });

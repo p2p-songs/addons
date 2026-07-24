@@ -1,30 +1,29 @@
 /**
- * Build the curated golden NDJSON from the **MusicBrainz canonical data dump**.
+ * Build the curated golden NDJSON by joining two CC0 sources:
  *
- * This is the production data source that replaces the per-artist API prototype
- * (`musicmeta/scripts/build-sample.mjs`). The canonical dump is CC0, already
- * deduplicated (one canonical release per recording — which dissolves the
- * edition/pressing ambiguity), and carries a `score` column that is a
- * **ListenBrainz-listen-derived popularity/priority ranking**. So a single file
- * gives us both the *content* and the *popularity scope* — no live API, no
- * ≤1 req/sec budget, no free-text search that would let parodies/covers in.
+ *  - **Popularity scope** — ListenBrainz sitewide "top artists" (`listenbrainz.ts`):
+ *    the ~1000 most-listened artists, with a real listen count each. This is what
+ *    makes the catalogue billboard-grade and keeps parodies/long-tail noise out —
+ *    only genuinely popular artists are in scope at all.
+ *  - **Content/breadth** — the **MusicBrainz canonical data dump**
+ *    (`canonical_musicbrainz_data.csv`, CC0): deduplicated (one canonical release
+ *    per recording), streamed offline. We keep only the rows whose **primary
+ *    artist MBID is in the popularity scope**, giving each popular artist's whole
+ *    catalogue without any per-artist API calls.
  *
- * We keep the **top-N recordings by score** (the popular, billboard-grade scope)
- * and derive three document types from exactly that set:
- *   - `track`  — one per canonical `recording_mbid`
- *   - `album`  — one per `release_mbid` seen among the kept tracks
- *   - `artist` — one per `artist_mbid`, only for single-artist credits (a joint
- *                "X feat. Y" credit has no single name to attribute, so it seeds
- *                no artist doc — but its album/track still carry the joint credit)
+ * (An earlier version used the canonical dump's `score` column as the popularity
+ * signal — it is not one; it behaves like a row ordinal, so top-N-by-score
+ * returned ~random obscure recordings. The listen-count join is the fix.)
  *
- * `searchtext` is `"<artist> <album> <title>"` (validated: makes "baby",
- * "baby justin bieber" in any order, and "my world baby" all resolve to the song),
- * and each doc carries the popularity `score` so Meili can break relevance ties by
- * popularity (see `meili-import.ts`).
+ * Each document carries the artist's **listen count as its `score`**, so Meili
+ * ranks a top artist's songs above a #900 artist's on a relevance tie (see
+ * `meili-import.ts`). `searchtext` is `"<artist> <album> <title>"` (validated:
+ * makes "baby", "baby justin bieber" in any order, and "my world baby" all
+ * resolve to the song). Albums/tracks carry a Cover Art Archive poster derived
+ * from their canonical release MBID.
  *
- * The multi-GB download + zstd extract is done by the caller (the nightly GitHub
- * Action: `curl … | tar --zstd -x`), so this stays a pure, streaming, testable
- * transform over a local `canonical_musicbrainz_data.csv`.
+ * The multi-GB dump download + zstd extract is done by the caller (the nightly
+ * GitHub Action), so this stays a streaming transform over a local CSV.
  *
  * CSV schema (comma-delimited, RFC-4180 quoting), columns in order:
  *   0 id · 1 artist_credit_id · 2 artist_mbids · 3 artist_credit_name ·
@@ -33,6 +32,7 @@
  */
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
+import type { ArtistPopularity } from "./listenbrainz.js";
 
 export type DocType = "artist" | "album" | "track";
 
@@ -45,12 +45,14 @@ export interface CatalogDoc {
   name: string;
   /** `"<artist> <album> <title>"` (or a prefix of it, by type) — the ranked field. */
   searchtext: string;
-  /** Popularity/priority from the canonical dump; higher = more popular. */
+  /** The artist's ListenBrainz listen count — the popularity signal. */
   score: number;
-  /** Artist credit — set on albums and tracks (used as a secondary searchable field). */
+  /** Artist credit — set on albums and tracks. */
   description?: string;
   /** Album title — set on tracks only. */
   album?: string;
+  /** Cover Art Archive poster URL — set on albums and tracks. */
+  poster?: string;
 }
 
 /** A single parsed canonical-dump row, narrowed to the fields we use. */
@@ -61,10 +63,13 @@ export interface CanonicalRow {
   releaseName: string;
   recordingMbid: string;
   recordingName: string;
-  score: number;
 }
 
 const sanitize = (id: string): string => id.replace(/[^A-Za-z0-9_-]/g, "_");
+
+/** Cover Art Archive front-cover URL for a release (no API call; 302-redirects). */
+const coverUrl = (releaseMbid: string): string =>
+  `https://coverartarchive.org/release/${releaseMbid}/front-500`;
 
 /**
  * Parse one RFC-4180 CSV line into fields. Handles `"`-quoted fields (which may
@@ -104,17 +109,16 @@ export function parseCsvLine(line: string): string[] {
 /** Map a raw CSV line to a {@link CanonicalRow}, or `null` if it's malformed. */
 export function rowFromCsvLine(line: string): CanonicalRow | null {
   const f = parseCsvLine(line);
-  if (f.length < 10) return null;
-  const score = Number.parseInt(f[9]!, 10);
-  if (!Number.isFinite(score)) return null;
+  if (f.length < 8) return null;
+  const recordingMbid = f[6]!;
+  if (!recordingMbid) return null; // header row / garbage
   return {
     artistMbids: f[2]!,
     artistCreditName: f[3]!,
     releaseMbid: f[4]!,
     releaseName: f[5]!,
-    recordingMbid: f[6]!,
+    recordingMbid,
     recordingName: f[7]!,
-    score,
   };
 }
 
@@ -129,122 +133,66 @@ export function parseArtistMbids(raw: string): string[] {
 }
 
 /**
- * A bounded min-heap that retains the `limit` highest-scoring rows seen, in O(1)
- * memory-per-row beyond the retained set — so we can scan the whole multi-GB dump
- * (tens of millions of rows) while only ever holding the top-N in memory.
+ * Derive the unified artist/album/track documents.
+ *
+ * Artist docs come straight from the popularity `scope` (clean ListenBrainz names
+ * and listen counts, one per scoped artist). Album/track docs come from the
+ * canonical `rows` whose **primary** artist is in scope, deduplicated per entity.
+ * Every doc's `score` is its artist's listen count.
  */
-export class TopN {
-  private readonly heap: CanonicalRow[] = [];
-  constructor(private readonly limit: number) {}
-
-  push(row: CanonicalRow): void {
-    if (this.limit <= 0) return;
-    if (this.heap.length < this.limit) {
-      this.heap.push(row);
-      this.bubbleUp(this.heap.length - 1);
-    } else if (row.score > this.heap[0]!.score) {
-      this.heap[0] = row;
-      this.bubbleDown(0);
-    }
-  }
-
-  /** The retained rows (unordered). */
-  values(): CanonicalRow[] {
-    return this.heap;
-  }
-
-  private bubbleUp(i: number): void {
-    while (i > 0) {
-      const parent = (i - 1) >> 1;
-      if (this.heap[i]!.score >= this.heap[parent]!.score) break;
-      this.swap(i, parent);
-      i = parent;
-    }
-  }
-
-  private bubbleDown(i: number): void {
-    const n = this.heap.length;
-    for (;;) {
-      const l = 2 * i + 1;
-      const r = 2 * i + 2;
-      let smallest = i;
-      if (l < n && this.heap[l]!.score < this.heap[smallest]!.score) smallest = l;
-      if (r < n && this.heap[r]!.score < this.heap[smallest]!.score) smallest = r;
-      if (smallest === i) break;
-      this.swap(i, smallest);
-      i = smallest;
-    }
-  }
-
-  private swap(a: number, b: number): void {
-    const tmp = this.heap[a]!;
-    this.heap[a] = this.heap[b]!;
-    this.heap[b] = tmp;
-  }
-}
-
-/**
- * Derive the unified artist/album/track documents from a set of canonical rows.
- * Deduplicates per entity, keeping the highest-scoring occurrence of each — so an
- * album's/artist's `score` reflects its most popular track.
- */
-export function docsFromRows(rows: Iterable<CanonicalRow>): CatalogDoc[] {
-  const artists = new Map<string, CatalogDoc>();
+export function docsFromRows(
+  rows: Iterable<CanonicalRow>,
+  scope: Map<string, ArtistPopularity>,
+): CatalogDoc[] {
   const albums = new Map<string, CatalogDoc>();
   const tracks = new Map<string, CatalogDoc>();
 
-  const keepMax = (map: Map<string, CatalogDoc>, key: string, make: () => CatalogDoc, score: number) => {
-    const existing = map.get(key);
-    if (!existing || score > existing.score) map.set(key, make());
-  };
-
   for (const row of rows) {
-    const artist = row.artistCreditName;
+    // Scope on the *primary* (first) artist MBID — a track only enters the
+    // catalogue as part of its own artist's discography, not every guest's.
+    const primary = parseArtistMbids(row.artistMbids)[0];
+    if (!primary) continue;
+    const artist = scope.get(primary);
+    if (!artist) continue;
+    const score = artist.listenCount;
+    const credit = row.artistCreditName || artist.name;
 
-    if (row.recordingMbid) {
+    if (row.recordingMbid && !tracks.has(row.recordingMbid)) {
       const id = `mbid:recording:${row.recordingMbid}`;
-      keepMax(tracks, row.recordingMbid, () => ({
+      tracks.set(row.recordingMbid, {
         docId: sanitize(id),
         id,
         type: "track",
         name: row.recordingName,
-        description: artist,
+        description: credit,
         album: row.releaseName,
-        searchtext: `${artist} ${row.releaseName} ${row.recordingName}`,
-        score: row.score,
-      }), row.score);
+        searchtext: `${credit} ${row.releaseName} ${row.recordingName}`,
+        score,
+        ...(row.releaseMbid ? { poster: coverUrl(row.releaseMbid) } : {}),
+      });
     }
 
-    if (row.releaseMbid) {
+    if (row.releaseMbid && !albums.has(row.releaseMbid)) {
       const id = `mbid:release:${row.releaseMbid}`;
-      keepMax(albums, row.releaseMbid, () => ({
+      albums.set(row.releaseMbid, {
         docId: sanitize(id),
         id,
         type: "album",
         name: row.releaseName,
-        description: artist,
-        searchtext: `${artist} ${row.releaseName}`,
-        score: row.score,
-      }), row.score);
-    }
-
-    // Only single-artist credits seed an artist doc: a joint "X feat. Y" credit
-    // has no single name to attribute to either MBID.
-    const mbids = parseArtistMbids(row.artistMbids);
-    if (mbids.length === 1 && mbids[0]) {
-      const id = `mbid:artist:${mbids[0]}`;
-      keepMax(artists, mbids[0], () => ({
-        docId: sanitize(id),
-        id,
-        type: "artist",
-        name: artist,
-        searchtext: artist,
-        score: row.score,
-      }), row.score);
+        description: credit,
+        searchtext: `${credit} ${row.releaseName}`,
+        score,
+        poster: coverUrl(row.releaseMbid),
+      });
     }
   }
 
-  return [...artists.values(), ...albums.values(), ...tracks.values()];
+  const artists: CatalogDoc[] = [...scope.values()].map((a) => {
+    const id = `mbid:artist:${a.mbid}`;
+    return { docId: sanitize(id), id, type: "artist", name: a.name, searchtext: a.name, score: a.listenCount };
+  });
+
+  return [...artists, ...albums.values(), ...tracks.values()];
 }
 
 /** Serialize documents to NDJSON (one JSON object per line, trailing newline). */
@@ -253,21 +201,22 @@ export function serializeNdjson(docs: CatalogDoc[]): string {
 }
 
 export interface BuildOptions {
-  /** Keep the top-N recordings by popularity score. */
-  limit: number;
+  /** The popularity scope — top artists keyed by MBID (from `fetchTopArtists`). */
+  artists: Map<string, ArtistPopularity>;
   /** Progress callback, invoked every `progressEvery` rows scanned. */
-  onProgress?: (rowsScanned: number) => void;
+  onProgress?: (rowsScanned: number, kept: number) => void;
   progressEvery?: number;
 }
 
 /**
- * Stream `canonical_musicbrainz_data.csv`, keep the top-N rows by score, and
- * return the curated NDJSON. Memory is bounded to the retained set regardless of
- * how large the dump is.
+ * Stream `canonical_musicbrainz_data.csv`, keep the rows whose primary artist is
+ * in the popularity scope, and return the curated NDJSON. Memory is bounded to
+ * the kept set (the scoped artists' catalogues), not the whole dump.
  */
 export async function buildCatalog(csvPath: string, opts: BuildOptions): Promise<string> {
-  const top = new TopN(opts.limit);
   const progressEvery = opts.progressEvery ?? 1_000_000;
+  const scopeMbids = opts.artists;
+  const kept: CanonicalRow[] = [];
   let scanned = 0;
   let header = true;
 
@@ -279,11 +228,13 @@ export async function buildCatalog(csvPath: string, opts: BuildOptions): Promise
     }
     if (line.length === 0) continue;
     const row = rowFromCsvLine(line);
-    if (!row) continue;
-    top.push(row);
-    if (++scanned % progressEvery === 0) opts.onProgress?.(scanned);
+    if (row) {
+      const primary = parseArtistMbids(row.artistMbids)[0];
+      if (primary && scopeMbids.has(primary)) kept.push(row);
+    }
+    if (++scanned % progressEvery === 0) opts.onProgress?.(scanned, kept.length);
   }
-  opts.onProgress?.(scanned);
+  opts.onProgress?.(scanned, kept.length);
 
-  return serializeNdjson(docsFromRows(top.values()));
+  return serializeNdjson(docsFromRows(kept, opts.artists));
 }

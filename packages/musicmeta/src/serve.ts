@@ -4,13 +4,16 @@
  *
  *   PORT=7002 node dist/serve.js
  *
- * MusicBrainz requires a descriptive User-Agent; set STREAM/META_USER_AGENT to
+ * MusicBrainz requires a descriptive User-Agent; set `MUSICMETA_USER_AGENT` to
  * your own contact per their API policy before running against the live service.
+ * (MusicBrainz is used only for **meta** detail — album track listings, etc. —
+ * not for search; search is served entirely from the curated index below.)
  *
- * **Optional search accelerator.** Set `MEILI_URL` (and `MEILI_API_KEY` if the
- * instance is secured) to put a Meilisearch index in front of catalog search —
- * ranked, typo-tolerant, self-warming. Unset, catalog search is direct
- * MusicBrainz exactly as before; the index is never a required dependency.
+ * **Curated search store.** Set `MEILI_URL` (and `MEILI_API_KEY` if the instance
+ * is secured) to serve catalog search from the offline-built Meilisearch
+ * catalogue — this is the production configuration, and it also enables the
+ * `/stats` endpoint (catalogue counts for the player). Unset, catalog search
+ * falls back to direct MusicBrainz as a dev convenience.
  *
  * **Binding.** Defaults to `127.0.0.1` — safe for local runs. In a container
  * (Railway/Fly/GCE), the platform routes to the pod's own interface, so set
@@ -20,6 +23,7 @@ import { serveHTTP } from "@p2p-songs/addon-sdk";
 import { MusicBrainzApi, CachedMusicBrainz } from "@p2p-songs/musicbrainz";
 import { createMusicMetaAddon } from "./handler.js";
 import { MeiliSearchIndex } from "./meili.js";
+import { createStatsRoute } from "./stats.js";
 
 const userAgent =
   process.env.MUSICMETA_USER_AGENT ??
@@ -33,7 +37,8 @@ const index = meiliUrl
       ...(process.env.MEILI_INDEX ? { indexName: process.env.MEILI_INDEX } : {}),
     })
   : undefined;
-if (index) console.error(`[musicmeta] search index: Meilisearch at ${meiliUrl}`);
+if (index) console.error(`[musicmeta] curated search store: Meilisearch at ${meiliUrl}`);
+else console.error("[musicmeta] no MEILI_URL — search falls back to direct MusicBrainz (dev)");
 
 const addon = createMusicMetaAddon({
   mb: new CachedMusicBrainz(new MusicBrainzApi(userAgent)),
@@ -46,6 +51,7 @@ const hostname = process.env.HOST ?? "127.0.0.1";
 serveHTTP(addon, {
   port,
   hostname,
+  extraRoutes: { "/stats": createStatsRoute(index) },
   onError: (err) => console.error("[musicmeta]", err instanceof Error ? `${err.name}: ${err.message}` : err),
 }).catch((err: unknown) => {
   console.error("[musicmeta] failed to start:", err);

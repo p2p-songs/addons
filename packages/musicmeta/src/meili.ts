@@ -1,38 +1,43 @@
 /**
- * The production {@link SearchIndex}: a Meilisearch-backed index reached over
- * its REST API with the platform `fetch` — no client dependency, keeping this
- * package as dependency-light as `@p2p-songs/musicbrainz`.
+ * The production {@link SearchIndex}: a **read-only** Meilisearch client reached
+ * over its REST API with the platform `fetch` — no client dependency, keeping
+ * this package as dependency-light as `@p2p-songs/musicbrainz`.
+ *
+ * `musicmeta` only ever reads. The index is built and kept current by the offline
+ * pipeline (`@p2p-songs/catalog-builder`): it creates the index, applies the
+ * search settings (searchable attributes, `type` filter, popularity ranking), and
+ * swaps in each new dataset atomically. So there is nothing here that creates the
+ * index, writes documents, or configures settings — this queries an index the
+ * importer owns.
  *
  * Why Meilisearch (over Typesense / Postgres FTS): MIT-licensed (this addon is
  * meant to be self-hosted by others), typo-tolerant and well-ranked out of the
- * box, single binary, low ops. Its default ranking rules — words → typo →
- * proximity → attribute → exactness — are already what we want: a title match
- * outranks an artist-name-only match, and `"justin bieber baby"` finds the song.
+ * box, single binary, low ops.
  *
  * ## One index, filtered by type
  *
  * All three content types share one index and are told apart by a filterable
  * `type` attribute, so a track query and an artist query rank within their own
- * kind. `searchableAttributes` is `["name","description"]` in that order, so a
- * name (title/artist/album) match weighs more than the one-line description
- * (which is usually the artist or the year).
+ * kind, and a facet count by `type` gives the per-type catalogue {@link stats}.
  *
- * ## Ids
+ * ## Ids and posters
  *
- * Our content ids are `mbid:recording:<uuid>` — but a Meilisearch primary key
- * only allows `[A-Za-z0-9_-]`. So the document key is a sanitized copy and the
- * real id rides along in an `id` field, which is what search results return.
+ * Stored documents key on a sanitized `docId` (Meilisearch primary keys allow
+ * only `[A-Za-z0-9_-]`); the real `mbid:…` id rides along in an `id` field, which
+ * is what results return. The curated documents carry no poster, so an **album**
+ * preview's poster is synthesized from its release id at read time (the Cover Art
+ * Archive URL is deterministic) — matching what direct album search always did.
  *
- * ## Readiness
+ * ## Missing index
  *
- * `filterableAttributes` must be configured before a filtered search, so the
- * first call runs a memoized `ensureReady()` that creates the index, applies
- * settings, and waits for that settings task to finish. Everything after is a
- * plain search/upsert.
+ * Before the importer's first run the index does not exist. A search then 404s;
+ * rather than treat that as an error (or, worse, create a half-configured index),
+ * {@link search} returns `[]` and {@link stats} returns zeros — a fresh deployment
+ * simply shows an empty catalogue until the first import lands.
  */
-import type { ContentType, MetaPreview } from "@p2p-songs/addon-sdk";
-import { metaPreviewSchema } from "@p2p-songs/addon-sdk";
-import type { SearchIndex } from "./search-index.js";
+import { parseMbid, metaPreviewSchema, type ContentType, type MetaPreview } from "@p2p-songs/addon-sdk";
+import { releaseFrontCover } from "./coverart.js";
+import type { CatalogStats, SearchIndex } from "./search-index.js";
 
 export interface MeiliOptions {
   /** Base URL of the Meilisearch instance, e.g. `http://127.0.0.1:7700`. */
@@ -41,11 +46,9 @@ export interface MeiliOptions {
   apiKey?: string;
   /** Index name (default `catalog`). */
   indexName?: string;
-  /** Bound on the one-time settings-task wait, ms (default 5000). */
-  readyTimeoutMs?: number;
 }
 
-/** The stored document. `docId` is the sanitized primary key; `id` is the real one. */
+/** The stored document, as written by the importer. `docId` is the primary key. */
 interface CatalogDoc {
   docId: string;
   id: string;
@@ -53,28 +56,16 @@ interface CatalogDoc {
   name: string;
   description?: string;
   poster?: string;
-  /**
-   * The primary ranking field: `"<artist> <title>"` (description then name).
-   * A user types the artist *and* the title ("justin bieber baby"), and putting
-   * them adjacent in one field is what lets the real song — titled just "Baby"
-   * by "Justin Bieber" — match the whole phrase and outrank a parody whose
-   * *title* happens to contain "Justin Bieber Baby". Validated against Meili's
-   * default ranking rules; name/description alone rank the parody first.
-   */
-  searchtext: string;
 }
 
 export class MeiliSearchIndex implements SearchIndex {
   private readonly base: string;
   private readonly index: string;
   private readonly headers: Record<string, string>;
-  private readonly readyTimeoutMs: number;
-  private ready?: Promise<void>;
 
   constructor(opts: MeiliOptions) {
     this.base = opts.url.replace(/\/+$/, "");
     this.index = opts.indexName ?? "catalog";
-    this.readyTimeoutMs = opts.readyTimeoutMs ?? 5000;
     this.headers = {
       "content-type": "application/json",
       ...(opts.apiKey ? { authorization: `Bearer ${opts.apiKey}` } : {}),
@@ -87,89 +78,42 @@ export class MeiliSearchIndex implements SearchIndex {
     limit: number,
     signal?: AbortSignal,
   ): Promise<MetaPreview[]> {
-    // At most one retry: if the index has gone missing under us (Meili was
-    // wiped/restarted), the first attempt 404s, we drop the stale readiness, and
-    // the second attempt re-creates it. Without this, a running process that had
-    // already initialized would search a vanished index forever and silently
-    // serve nothing — the accelerator must self-heal, not need a redeploy.
-    for (let attempt = 0; ; attempt++) {
-      await this.ensureReady();
-      try {
-        const body = await this.req<{ hits: CatalogDoc[] }>(
-          "POST",
-          `/indexes/${this.index}/search`,
-          { q: query, limit, filter: `type = ${JSON.stringify(type)}` },
-          signal,
-        );
-        const out: MetaPreview[] = [];
-        for (const hit of body.hits) {
-          // Re-validate against the protocol on the way out: the index is a cache
-          // of our own writes, but a schema-checked boundary means a stray/legacy
-          // document can never become a malformed catalog response.
-          const parsed = metaPreviewSchema.safeParse(docToPreview(hit));
-          if (parsed.success) out.push(parsed.data);
-        }
-        return out;
-      } catch (err) {
-        if (attempt === 0 && isIndexMissing(err)) {
-          this.ready = undefined;
-          continue;
-        }
-        throw err;
-      }
+    let body: { hits: CatalogDoc[] };
+    try {
+      body = await this.req<{ hits: CatalogDoc[] }>(
+        "POST",
+        `/indexes/${this.index}/search`,
+        { q: query, limit, filter: `type = ${JSON.stringify(type)}` },
+        signal,
+      );
+    } catch (err) {
+      if (isIndexMissing(err)) return []; // not imported yet → empty catalogue
+      throw err;
     }
-  }
-
-  async upsert(items: readonly MetaPreview[]): Promise<void> {
-    if (items.length === 0) return;
-    await this.ensureReady();
-    const docs = items.map(previewToDoc);
-    await this.req("PUT", `/indexes/${this.index}/documents`, docs);
-  }
-
-  /**
-   * Create the index and apply settings once, memoized. A *failed* initialize
-   * clears the memo so the next call retries — otherwise a transient Meili blip
-   * during the first request would disable the accelerator for the whole
-   * process lifetime.
-   */
-  private ensureReady(): Promise<void> {
-    if (!this.ready) {
-      this.ready = this.initialize().catch((err) => {
-        this.ready = undefined;
-        throw err;
-      });
+    const out: MetaPreview[] = [];
+    for (const hit of body.hits) {
+      // Re-validate against the protocol on the way out: a stray/legacy document
+      // can never become a malformed catalog response.
+      const parsed = metaPreviewSchema.safeParse(docToPreview(hit));
+      if (parsed.success) out.push(parsed.data);
     }
-    return this.ready;
+    return out;
   }
 
-  private async initialize(): Promise<void> {
-    // Create the index (idempotent — an existing index just yields a no-op task).
-    await this.req("POST", "/indexes", { uid: this.index, primaryKey: "docId" });
-    const task = await this.req<{ taskUid: number }>(
-      "PATCH",
-      `/indexes/${this.index}/settings`,
-      {
-        // `searchtext` (artist + title) leads so a full phrase query ranks the
-        // right recording first; name/description stay searchable for partials.
-        searchableAttributes: ["searchtext", "name", "description"],
-        filterableAttributes: ["type"],
-      },
-    );
-    await this.waitForTask(task.taskUid);
-  }
-
-  private async waitForTask(taskUid: number): Promise<void> {
-    const deadline = Date.now() + this.readyTimeoutMs;
-    for (;;) {
-      const task = await this.req<{ status: string }>("GET", `/tasks/${taskUid}`);
-      if (task.status === "succeeded") return;
-      if (task.status === "failed" || task.status === "canceled") {
-        throw new Error(`meilisearch settings task ${taskUid} ${task.status}`);
-      }
-      if (Date.now() > deadline) throw new Error(`meilisearch settings task ${taskUid} timed out`);
-      await new Promise((r) => setTimeout(r, 50));
+  async stats(signal?: AbortSignal): Promise<CatalogStats> {
+    let body: { facetDistribution?: { type?: Record<string, number> } };
+    try {
+      // limit:0 — we want only the facet counts, not documents.
+      body = await this.req("POST", `/indexes/${this.index}/search`, { q: "", limit: 0, facets: ["type"] }, signal);
+    } catch (err) {
+      if (isIndexMissing(err)) return { artist: 0, album: 0, track: 0, total: 0 };
+      throw err;
     }
+    const dist = body.facetDistribution?.type ?? {};
+    const artist = dist.artist ?? 0;
+    const album = dist.album ?? 0;
+    const track = dist.track ?? 0;
+    return { artist, album, track, total: artist + album + track };
   }
 
   private async req<T = unknown>(
@@ -207,30 +151,19 @@ function isIndexMissing(err: unknown): boolean {
   return err instanceof MeiliError && err.status === 404;
 }
 
-function sanitizeDocId(id: string): string {
-  return id.replace(/[^A-Za-z0-9_-]/g, "_");
-}
-
-function previewToDoc(p: MetaPreview): CatalogDoc {
-  return {
-    docId: sanitizeDocId(p.id),
-    id: p.id,
-    type: p.type,
-    name: p.name,
-    // Artist first, then title, so a full "artist + title" query matches the
-    // phrase; empty description (e.g. an artist row) collapses to just the name.
-    searchtext: p.description ? `${p.description} ${p.name}` : p.name,
-    ...(p.description ? { description: p.description } : {}),
-    ...(p.poster ? { poster: p.poster } : {}),
-  };
-}
-
 function docToPreview(d: CatalogDoc): unknown {
+  // Albums get a deterministic Cover Art Archive poster from their release id
+  // (the curated documents store none); other types keep whatever they carry.
+  let poster = d.poster;
+  if (!poster && d.type === "album") {
+    const { uuid } = parseMbid(d.id);
+    if (uuid) poster = releaseFrontCover(uuid);
+  }
   return {
     type: d.type,
     id: d.id,
     name: d.name,
     ...(d.description ? { description: d.description } : {}),
-    ...(d.poster ? { poster: d.poster } : {}),
+    ...(poster ? { poster } : {}),
   };
 }

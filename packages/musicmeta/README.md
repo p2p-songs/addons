@@ -32,38 +32,45 @@ resolves that same `recordingId` to a playable stream. The shared
 
 ## Search — a curated Meilisearch catalogue
 
-> **Design evolving (2026-07-24).** Search is moving from a Meilisearch
-> *accelerator in front of live MusicBrainz* to Meilisearch as the **curated
-> catalogue this addon serves from**, built offline. MusicBrainz search is a
-> cataloguer's index that returns parodies/covers for how people actually type
-> (`"justin bieber baby"` surfaced the *artist* or a parody, not the song), and
-> hydrating an index by writing those results back inherited the junk. The fix is
-> curation, not ranking tricks.
+**Search is served entirely from a curated Meilisearch catalogue** built offline;
+MusicBrainz is not in the search path. (It used to be an *accelerator in front of
+live MusicBrainz*, read-through / write-back — but MB search returns parodies/covers
+for how people actually type, e.g. `"justin bieber baby"` surfaced the artist or a
+parody, and writing those back inherited the junk. The fix was curation, not ranking
+tricks.)
 
 **The plane, now:** an offline pipeline
-([`@p2p-songs/catalog-builder`](../catalog-builder)) traverses **official
-release-groups only** — so parodies/live/bootleg can't enter — scoped by
-ListenBrainz popularity and sourced from the MusicBrainz canonical bulk dump (both
-CC0), publishes a versioned golden **NDJSON dataset to R2**, and a runtime import
-does a zero-downtime swap into Meilisearch. `musicmeta` then serves **one unified
-search** over artists/albums/songs, ranked by a stored
-`searchtext = "<artist> <album> <title>"` (which makes "baby", "baby justin
-bieber", and "my world baby" all resolve to the song). Full design:
+([`@p2p-songs/catalog-builder`](../catalog-builder)) scopes to the most-listened
+artists (ListenBrainz sitewide stats) and takes their catalogues from the MusicBrainz
+canonical bulk dump (both CC0), publishes a versioned golden **NDJSON dataset to R2**,
+and a runtime import does a zero-downtime swap into Meilisearch. `musicmeta` then
+**only reads** that index — one unified search over artists/albums/songs, ranked by a
+stored `searchtext = "<artist> <album> <title>"` (which makes "baby", "baby justin
+bieber", and "my world baby" all resolve to the song) with the artist's listen count
+as a popularity tiebreaker. Full design:
 [`p2p-songs/.github` — `docs/CATALOG_PIPELINE.md`](https://github.com/p2p-songs/.github/blob/main/docs/CATALOG_PIPELINE.md).
+
+**Meta** detail (`/meta/...` — album track listings with disc/position/duration) still
+enriches per-item from MusicBrainz: it is a bounded, cached, per-item lookup, not the
+scaling-critical search path, and it is the source of track ordering the curated search
+docs deliberately don't carry.
+
+**`/stats`** returns the live catalogue counts (`{artist, album, track, total}`, from
+Meili's `type` facet) for the player's "X songs · Y albums · Z artists indexed"
+indicator — `503` when no index is configured.
 
 Invariants: **identity only** (`metaPreview` — id/name/poster, no hashes/sources →
 legally inert and shareable, unlike a *stream*-side hash cache which lives
-per-user inside `stream-debrid`); and Meilisearch is now a **required curated
+per-user inside `stream-debrid`); and Meilisearch is a **required curated
 store**, not an optional accelerator — its resilience is the rebuildable,
 provider-portable R2 dataset, not a live-MusicBrainz fallback. Chosen over
 Typesense (MIT vs GPL-3.0) and Postgres FTS (no typo tolerance).
 
 ```sh
+# production: search from the curated index + enable /stats
 MEILI_URL=http://127.0.0.1:7700 MEILI_API_KEY=… MEILI_INDEX=catalog PORT=7002 node dist/serve.js
+# no MEILI_URL → search falls back to direct MusicBrainz (dev convenience only)
 ```
-
-(The transitional `search-index.ts` read-through/write-back adapter is being
-retired as serving moves to Meili-only.)
 
 ## Run
 

@@ -22,29 +22,14 @@ export interface CatalogDeps {
   mb: MusicBrainzClient;
   limit?: number;
   /**
-   * Optional search accelerator (Meilisearch in production). When absent,
-   * `searchCatalog` is exactly the direct-MusicBrainz behaviour it always was —
-   * the index is purely additive, so a deployment without `MEILI_URL` is
-   * unaffected.
+   * The curated search store (Meilisearch in production). When present, search is
+   * served **from it only** — it is the curated catalogue, and there is no
+   * live-MusicBrainz fallback (that fallback is what returned parodies/covers).
+   * When absent — a local run without `MEILI_URL` — search falls back to direct
+   * MusicBrainz purely as a dev convenience.
    */
   index?: SearchIndex;
-  /**
-   * Serve from the index only when it returns at least this many hits;
-   * otherwise treat the query as cold and go to MusicBrainz (which also
-   * re-hydrates). Guards against answering with one stale document when MB would
-   * return a full page. Default {@link DEFAULT_MIN_INDEX_HITS}.
-   */
-  minIndexHits?: number;
 }
-
-/**
- * Below this many index hits, a query is "cold enough" to prefer MusicBrainz.
- * Low, not zero: a genuinely niche query may only ever have a couple of real
- * matches, and re-hitting MB for every one of those forever would defeat the
- * cache. The floor mainly stops a half-warmed index from shadowing MB's fuller
- * result on popular queries.
- */
-export const DEFAULT_MIN_INDEX_HITS = 3;
 
 /**
  * An artist's discography, as album previews.
@@ -75,13 +60,12 @@ export async function artistAlbumsCatalog(
 }
 
 /**
- * Catalog search with the index in the loop: **read-through** (ask the index
- * first) and **write-back** (hydrate the index from MusicBrainz on a miss).
- *
- * The index is an accelerator, never a dependency — a failed *read* falls
- * through to MusicBrainz, and a failed *write* is swallowed off the response
- * path (a search should never fail, or even wait, because caching it did). With
- * no index configured this is a straight MusicBrainz search, unchanged.
+ * Catalog search. When a curated index is configured it is the **sole** source —
+ * `musicmeta` serves search straight from the offline-built catalogue, and
+ * MusicBrainz is not consulted at request time (that is the whole point of the
+ * inversion: MB free-text search returned parodies/covers, and every query paid
+ * its rate budget). Only a local run *without* `MEILI_URL` falls back to direct
+ * MusicBrainz, as a dev convenience.
  */
 export async function searchCatalog(
   type: ContentType,
@@ -90,29 +74,11 @@ export async function searchCatalog(
   signal?: AbortSignal,
 ): Promise<MetaPreview[]> {
   const limit = deps.limit ?? 25;
-  const { index } = deps;
-
-  if (index) {
-    try {
-      const hits = await index.search(type, search, limit, signal);
-      if (hits.length >= (deps.minIndexHits ?? DEFAULT_MIN_INDEX_HITS)) return hits;
-    } catch {
-      // Index unreachable → treat as cold and let MusicBrainz answer.
-    }
-  }
-
-  const fresh = await searchMusicBrainz(type, search, deps, signal);
-
-  if (index && fresh.length > 0) {
-    // Hydrate off the response path: don't make the caller wait on (or fail
-    // from) the write. In a long-lived server this settles right after we reply.
-    void index.upsert(fresh).catch(() => {});
-  }
-
-  return fresh;
+  if (deps.index) return deps.index.search(type, search, limit, signal);
+  return searchMusicBrainz(type, search, deps, signal);
 }
 
-/** The original MusicBrainz search — the source of truth the index is fed from. */
+/** Direct MusicBrainz search — the dev fallback when no curated index is configured. */
 async function searchMusicBrainz(
   type: ContentType,
   search: string,

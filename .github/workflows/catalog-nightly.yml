@@ -10,9 +10,9 @@
 #   R2_ACCOUNT_ID         Cloudflare account id (the endpoint is derived from it)
 #   R2_ACCESS_KEY_ID      R2 API token access key
 #   R2_SECRET_ACCESS_KEY  R2 API token secret
-# Optional repo variable:
+# Optional repo variables:
 #   R2_BUCKET             defaults to songs-catalog
-#   CATALOG_LIMIT         top-N recordings by popularity (default 250000)
+#   CATALOG_ARTIST_LIMIT  popularity scope: top-N ListenBrainz artists (default 1000)
 
 name: catalog-nightly
 
@@ -21,10 +21,10 @@ on:
     - cron: "0 4 * * *" # 04:00 UTC daily (the dump refreshes on the 1st & 15th)
   workflow_dispatch:
     inputs:
-      limit:
-        description: "top-N recordings by popularity"
+      artist_limit:
+        description: "popularity scope: top-N ListenBrainz artists"
         required: false
-        default: "250000"
+        default: "1000"
 
 concurrency:
   group: catalog-nightly
@@ -71,7 +71,8 @@ jobs:
 
       - name: Build the curated golden NDJSON
         env:
-          CATALOG_LIMIT: ${{ github.event.inputs.limit || vars.CATALOG_LIMIT || '250000' }}
+          # Popularity scope (ListenBrainz top artists) ⋈ the canonical dump.
+          CATALOG_ARTIST_LIMIT: ${{ github.event.inputs.artist_limit || vars.CATALOG_ARTIST_LIMIT || '1000' }}
         run: node dist/cli.js build canonical_musicbrainz_data.csv catalog.ndjson
 
       - name: Publish the versioned snapshot to R2

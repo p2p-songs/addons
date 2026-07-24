@@ -1,15 +1,16 @@
 # Meilisearch for musicmeta
 
-Meilisearch is the optional search accelerator behind `musicmeta` (read-through /
-write-back; see the package README's "Search index" section). It is **stateful**
-— always-on, with a persistent volume — which is why it lives on a VPS/GCE box or
-a Railway service with a volume, never on a scale-to-zero/serverless runtime.
+Meilisearch is the **curated search store** behind `musicmeta` — read-only from the
+addon; the `catalog-importer` is the sole writer (see `../catalog-importer.Dockerfile`
+and the package README's "Search" section). It is **stateful** — always-on, with a
+persistent volume — which is why it lives on a VPS/GCE box or a Railway service with a
+volume, never on a scale-to-zero/serverless runtime.
 
-## What musicmeta stores here
+## What is stored here
 
-Identity-only `metaPreview` docs — id, name, poster, type. **No hashes, no
-sources.** A few hundred bytes each, so the index is small: snapshots run ~30 MB
-per 10M docs and reload in seconds. 2–4 GB RAM serves it comfortably; disk (small)
+Identity-only catalogue docs — id, name, poster, type, searchtext, popularity score.
+**No hashes, no sources.** A few hundred bytes each, so the index is small: snapshots
+run ~30 MB per 10M docs and reload in seconds. 2–4 GB RAM serves it comfortably; disk (small)
 is the real constraint. The heavy "35 GB RAM per 1 GB JSON" figure is the *bulk
 indexing* peak — musicmeta never hits it because it warms incrementally, one
 search's worth per upsert.
@@ -37,12 +38,13 @@ spike can OOM-kill it into a restart loop. This bit us live on a small Railway
 service (it flapped between 24- and 48-worker boots). Two things prevent it:
 
 - Give the service **≥1 GB** memory (or don't cap it below that).
-- Set **`MEILI_MAX_INDEXING_MEMORY=256Mb`** to bound the indexing phase. Our
-  write-back batches are tiny (one search's worth), so this costs nothing and
-  keeps the footprint flat regardless of host CPU count.
+- Set **`MEILI_MAX_INDEXING_MEMORY=256Mb`** to bound the indexing phase. The
+  importer streams the whole dataset in at once, so this cap is what keeps the
+  footprint flat regardless of host CPU count.
 
-musicmeta tolerates a Meilisearch outage (it falls back to MusicBrainz and
-self-heals the index on recovery), but a *flapping* Meili still adds latency
+Search has **no live-MusicBrainz fallback** (that is the point of the curated store),
+so a Meilisearch outage means search returns empty until it recovers — a *flapping*
+Meili still adds latency
 while connections time out — so keeping it stable matters.
 
 **Never expose Meilisearch to the internet.** It sits on the private network

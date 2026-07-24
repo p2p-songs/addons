@@ -34,15 +34,21 @@ node dist/cli.js versions               list snapshot keys, newest first
 node dist/cli.js rollback <key>         repoint latest.json at an existing snapshot
 ```
 
-`build` streams the **MusicBrainz canonical dump** CSV, keeps the top-N recordings
-by the dump's `score` (a ListenBrainz-listen-derived popularity/priority ranking —
-`CATALOG_LIMIT`, default 250 000), and derives the unified artist/album/track
-documents from exactly that set. Memory is bounded to the retained set (a min-heap),
-so the whole multi-GB dump streams through. Official-by-construction: the canonical
-mapping already prefers official releases and free-text search is never used, so
-parodies/covers/bootlegs don't enter. Each doc carries its popularity `score`, which
-`import` wires as Meili's final ranking tiebreaker (relevance first, popularity breaks
-ties). Get the CSV with:
+`build` joins two CC0 sources:
+
+- **Popularity scope** — ListenBrainz **sitewide top artists** (`CATALOG_ARTIST_LIMIT`,
+  default 1000; `LISTENBRAINZ_RANGE`, default `all_time`): the most-listened artists,
+  each with a real listen count. This is what makes the catalogue billboard-grade and
+  keeps long-tail/parody noise out — only popular artists are in scope.
+- **Content/breadth** — the **MusicBrainz canonical dump** CSV, streamed offline; it
+  keeps only the rows whose primary artist is in that scope, giving each popular
+  artist's whole catalogue with no per-artist API calls.
+
+Each document's `score` is its artist's listen count, which `import` wires as Meili's
+final ranking tiebreaker (relevance first, popularity breaks ties). Albums/tracks get
+a Cover Art Archive poster from their canonical release. (The dump's own `score`
+column is **not** a popularity signal — it behaves like a row ordinal — which is why
+the listen-count join exists.) Get the CSV with:
 
 ```sh
 BASE=https://data.metabrainz.org/pub/musicbrainz/canonical_data

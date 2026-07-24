@@ -201,21 +201,26 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   read-through/write-back accelerator).** The plane was **inverted**: Meilisearch
   is no longer an accelerator hydrated by write-back from free-text MB (that
   filled it with parodies and coupled every query to MB's rate budget). It is now
-  the **curated catalogue `musicmeta` serves from**, built *offline* and imported;
-  **MusicBrainz never runs at request time.** An offline pipeline
-  (`@p2p-songs/catalog-builder`) traverses **official release-groups only** (no
-  parodies/live/bootleg), scoped by ListenBrainz popularity + the MB canonical
-  bulk dump (CC0), publishes a versioned golden **NDJSON dataset to R2** (system of
-  record), and a runtime **import** does a zero-downtime swap into Meili. Player
-  gets **one unified search** over artists/albums/songs ranked by a stored
-  `searchtext = "<artist> <album> <title>"`. **Invariants:** still **identity
-  only** (`metaPreview`: id/name/poster, no hashes/sources → legally inert +
-  shareable + default-installable, neutrality §11 governs the *stream* plane); but
-  Meili is now a **required curated store, NOT "accelerator never a dependency"** —
-  no live-MB fallback, resilience comes from the rebuildable R2 dataset. Full
-  design: `../.github/docs/CATALOG_PIPELINE.md`. (The old `search-index.ts` port /
-  `MeiliSearchIndex` write-back adapter is being retired as musicmeta slims to
-  Meili-only serving.)
+  the **curated catalogue `musicmeta` serves search from**, built *offline* and
+  imported; **MusicBrainz never runs in the search path** (it still enriches per-item
+  **meta** — album track listings — a bounded cached lookup, not search). An offline
+  pipeline (`@p2p-songs/catalog-builder`) **joins** two CC0 sources — popularity from
+  **ListenBrainz sitewide top artists** (the scope) and content from the **MB
+  canonical bulk dump** filtered to those artists — publishes a versioned golden
+  **NDJSON dataset to R2** (system of record), and a runtime **import** does a
+  zero-downtime swap into Meili. NB: the canonical dump's own `score` is *not*
+  popularity (it's a row ordinal — an early build using it returned junk); the
+  artist listen-count join is the fix. Player gets **one unified search** over
+  artists/albums/songs ranked by stored `searchtext = "<artist> <album> <title>"` +
+  artist-listen-count tiebreaker. **Invariants:** still **identity only**
+  (`metaPreview`: id/name/poster, no hashes/sources → legally inert + shareable +
+  default-installable, neutrality §11 governs the *stream* plane); Meili is a
+  **required curated store, NOT "accelerator never a dependency"** — no live-MB
+  fallback for search, resilience comes from the rebuildable R2 dataset. Full design:
+  `../.github/docs/CATALOG_PIPELINE.md`. `musicmeta` now **reads the index only**
+  (`MeiliSearchIndex`: search + `stats`, no write-back), and exposes **`/stats`**
+  (per-type counts via Meili's `type` facet, wired through the SDK's `serveHTTP`
+  `extraRoutes`) for the player's catalogue-size indicator.
 
   **Hosting (2026-07-23):** ready-to-run assets in `deploy/` — `docker-compose.yml`
   (musicmeta + a private Meilisearch on one box), a Railway two-service setup,

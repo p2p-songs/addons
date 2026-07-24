@@ -11,9 +11,10 @@ export interface MusicMetaDeps {
   /** Max catalog results per search (default 25). */
   catalogLimit?: number;
   /**
-   * Optional search accelerator. Absent → catalog search is direct MusicBrainz
-   * (unchanged). Present (Meilisearch) → read-through/write-back, so search is
-   * ranked, typo-tolerant, and warms itself. Purely additive.
+   * The curated search store (Meilisearch in production). Present → catalog
+   * search is served from it only (ranked, typo-tolerant, official-only);
+   * absent → direct MusicBrainz, a dev convenience for `MEILI_URL`-less runs.
+   * Also powers the `/stats` endpoint (catalogue counts) — see `serve.ts`.
    */
   index?: SearchIndex;
 }
