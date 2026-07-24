@@ -15,6 +15,17 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { S3ObjectStore, FileObjectStore } from "./store.js";
 import { publishDataset, fetchLatest, listVersions, rollbackTo } from "./dataset.js";
+import { importToMeili, type MeiliTarget } from "./meili-import.js";
+
+function meiliFromEnv(): MeiliTarget {
+  const url = process.env.MEILI_URL;
+  if (!url) throw new Error("set MEILI_URL [, MEILI_API_KEY, MEILI_INDEX=catalog]");
+  return {
+    url,
+    ...(process.env.MEILI_API_KEY ? { apiKey: process.env.MEILI_API_KEY } : {}),
+    ...(process.env.MEILI_INDEX ? { index: process.env.MEILI_INDEX } : {}),
+  };
+}
 
 function storeFromEnv(): S3ObjectStore {
   const endpoint =
@@ -60,6 +71,15 @@ try {
       const { manifest, ndjson } = await fetchLatest(storeFromEnv());
       writeFileSync(out, ndjson);
       console.error(`fetched ${manifest.key} → ${out} (${manifest.records} docs)`, manifest.counts);
+      break;
+    }
+    case "import": {
+      // R2 → verify → zero-downtime reindex into Meili. Runs where it can reach
+      // Meili (inside Railway in prod; against a local Meili for testing).
+      const { manifest, ndjson } = await fetchLatest(storeFromEnv());
+      console.error(`fetched ${manifest.key} (${manifest.records} docs)`, manifest.counts);
+      const result = await importToMeili(meiliFromEnv(), ndjson, (m) => console.error(`  ${m}`));
+      console.error(`indexed ${result.numberOfDocuments} docs into "${result.index}"`);
       break;
     }
     case "versions": {

@@ -10,3 +10,5 @@ export {
   listVersions,
   rollbackTo,
 } from "./dataset.js";
+export type { MeiliTarget, ImportResult } from "./meili-import.js";
+export { importToMeili } from "./meili-import.js";
