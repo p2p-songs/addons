@@ -4,6 +4,7 @@
 **/node_modules
 **/dist
 **/*.tsbuildinfo
+.git
 **/.git
 **/.DS_Store
 **/.env
@@ -12,3 +13,5 @@
 player/
 backend/
 .github/
+.claude/
+.pnpm-store/

@@ -12,7 +12,11 @@
 # SDK — deploy the prebuilt image instead. See deploy/railway/README.md.
 
 # ---- build stage: build the SDK, then the addons workspace ----
-FROM node:22-slim AS build
+# Pinned to $BUILDPLATFORM so the compile runs natively on the builder's arch
+# (no QEMU): musicmeta's runtime deps are pure JS (zod-based; esbuild/vitest are
+# dev-only), so the artifacts are architecture-independent and the amd64 runtime
+# below just copies them. This is what lets an arm64 Mac produce an amd64 image.
+FROM --platform=$BUILDPLATFORM node:22-slim AS build
 ENV CI=1
 RUN corepack enable
 WORKDIR /app
