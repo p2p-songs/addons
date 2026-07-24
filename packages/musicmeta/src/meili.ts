@@ -53,6 +53,15 @@ interface CatalogDoc {
   name: string;
   description?: string;
   poster?: string;
+  /**
+   * The primary ranking field: `"<artist> <title>"` (description then name).
+   * A user types the artist *and* the title ("justin bieber baby"), and putting
+   * them adjacent in one field is what lets the real song — titled just "Baby"
+   * by "Justin Bieber" — match the whole phrase and outrank a parody whose
+   * *title* happens to contain "Justin Bieber Baby". Validated against Meili's
+   * default ranking rules; name/description alone rank the parody first.
+   */
+  searchtext: string;
 }
 
 export class MeiliSearchIndex implements SearchIndex {
@@ -141,7 +150,9 @@ export class MeiliSearchIndex implements SearchIndex {
       "PATCH",
       `/indexes/${this.index}/settings`,
       {
-        searchableAttributes: ["name", "description"],
+        // `searchtext` (artist + title) leads so a full phrase query ranks the
+        // right recording first; name/description stay searchable for partials.
+        searchableAttributes: ["searchtext", "name", "description"],
         filterableAttributes: ["type"],
       },
     );
@@ -206,6 +217,9 @@ function previewToDoc(p: MetaPreview): CatalogDoc {
     id: p.id,
     type: p.type,
     name: p.name,
+    // Artist first, then title, so a full "artist + title" query matches the
+    // phrase; empty description (e.g. an artist row) collapses to just the name.
+    searchtext: p.description ? `${p.description} ${p.name}` : p.name,
     ...(p.description ? { description: p.description } : {}),
     ...(p.poster ? { poster: p.poster } : {}),
   };
