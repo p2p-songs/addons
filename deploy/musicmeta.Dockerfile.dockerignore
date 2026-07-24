@@ -1,0 +1,14 @@
+# BuildKit reads this per-Dockerfile ignore file automatically. Patterns are
+# relative to the build context (the p2p-songs parent). Keep host build junk out
+# of the image so it does a clean install.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+**/.git
+**/.DS_Store
+**/.env
+**/.env.*
+# Only the SDK and the addons workspace are needed to build musicmeta.
+player/
+backend/
+.github/

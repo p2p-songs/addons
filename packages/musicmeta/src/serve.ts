@@ -11,6 +11,10 @@
  * instance is secured) to put a Meilisearch index in front of catalog search —
  * ranked, typo-tolerant, self-warming. Unset, catalog search is direct
  * MusicBrainz exactly as before; the index is never a required dependency.
+ *
+ * **Binding.** Defaults to `127.0.0.1` — safe for local runs. In a container
+ * (Railway/Fly/GCE), the platform routes to the pod's own interface, so set
+ * `HOST=0.0.0.0`. `PORT` is honoured either way (platforms inject it).
  */
 import { serveHTTP } from "@p2p-songs/addon-sdk";
 import { MusicBrainzApi, CachedMusicBrainz } from "@p2p-songs/musicbrainz";
@@ -37,9 +41,11 @@ const addon = createMusicMetaAddon({
 });
 
 const port = Number(process.env.PORT ?? 7002);
+const hostname = process.env.HOST ?? "127.0.0.1";
 
 serveHTTP(addon, {
   port,
+  hostname,
   onError: (err) => console.error("[musicmeta]", err instanceof Error ? `${err.name}: ${err.message}` : err),
 }).catch((err: unknown) => {
   console.error("[musicmeta] failed to start:", err);

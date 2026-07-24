@@ -1,0 +1,47 @@
+# Tier 0 full stack: musicmeta + a private Meilisearch on one box (VPS / GCE).
+#
+#   cd addons/deploy
+#   export MEILI_MASTER_KEY="$(openssl rand -base64 36)"
+#   docker compose up -d --build
+#
+# Then put Cloudflare in front of :7002 (a Tunnel, or a TLS reverse proxy) —
+# see deploy/cloudflare/README.md. Nothing here is exposed to the internet
+# directly: musicmeta binds to loopback, Meilisearch only to the compose network.
+
+services:
+  meilisearch:
+    # Pin an explicit release; do not track :latest in production.
+    image: getmeili/meilisearch:v1.12
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?set MEILI_MASTER_KEY to a long random string}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+      # A point-in-time snapshot every 24h; backup.sh ships them off-box.
+      MEILI_SCHEDULE_SNAPSHOT: "86400"
+    volumes:
+      - meili_data:/meili_data
+    # Reachable only from other services on this network — never published.
+    expose:
+      - "7700"
+
+  musicmeta:
+    build:
+      context: ../..                              # the p2p-songs parent dir
+      dockerfile: addons/deploy/musicmeta.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - meilisearch
+    environment:
+      HOST: 0.0.0.0                               # bind the container interface
+      PORT: "7002"
+      MEILI_URL: http://meilisearch:7700          # private, over the compose net
+      MEILI_API_KEY: ${MEILI_MASTER_KEY:?}        # or a scoped Meili key in prod
+      # Set your own contact per MusicBrainz policy before real traffic.
+      MUSICMETA_USER_AGENT: ${MUSICMETA_USER_AGENT:-p2p-songs-musicmeta/0.1.0 (https://github.com/p2p-songs/addons)}
+    ports:
+      # Loopback only — Cloudflare (Tunnel/proxy) is the sole public entry.
+      - "127.0.0.1:7002:7002"
+
+volumes:
+  meili_data:

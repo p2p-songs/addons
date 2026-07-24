@@ -71,6 +71,18 @@ PORT=7002 node dist/serve.js
 MusicBrainz requires a descriptive `User-Agent`; set `MUSICMETA_USER_AGENT` to
 your own contact string before running against the live service.
 
+Binding defaults to `127.0.0.1` (safe for local). In a container, set
+`HOST=0.0.0.0` so the platform can route to it; `PORT` is honoured either way.
+
+## Deploy (hosted)
+
+`musicmeta` is meant to be hosted **once, centrally** — a shared metadata cache
+for every player by construction (`.github/docs/DEPLOYMENT.md` → "The metadata
+plane"). Ready-to-use assets live in [`../../deploy`](../../deploy): a
+`docker-compose.yml` (musicmeta + a private Meilisearch on one box), a Railway
+two-service setup, off-box Meilisearch backups, and the Cloudflare edge
+(cache rule + rate limit + DDoS). Start at [`../../deploy/README.md`](../../deploy/README.md).
+
 ## Library use
 
 `createMusicMetaAddon({ mb })` returns an SDK `AddonInterface`; the MusicBrainz

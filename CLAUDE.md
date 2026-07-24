@@ -205,6 +205,16 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   **default-installed** in the player (neutrality §11 governs the *stream* plane;
   a default metadata addon is fine) — player wiring is a follow-up increment.
 
+  **Hosting (2026-07-23):** ready-to-run assets in `deploy/` — `docker-compose.yml`
+  (musicmeta + a private Meilisearch on one box), a Railway two-service setup,
+  off-box Meili backups, and the Cloudflare edge (cache rule on catalog responses
+  + rate limit + Bot Fight Mode). `serve.ts` now reads `HOST` (defaults to
+  `127.0.0.1`; containers set `0.0.0.0`) so the SDK's loopback default doesn't make
+  a pod unroutable. One build caveat baked into the Dockerfile: musicmeta's
+  `link:` dep on the sibling SDK means the build context is the **p2p-songs
+  parent**, so single-repo hosts (Railway's native builder) deploy the prebuilt
+  image until the SDK is published. See `deploy/README.md`.
+
   **The discography is a release-*group* `search`, not a release `browse`**
   (`artistDiscography`) — one request per artist, complete. Three live
   measurements forced that, and each was a bug first:
