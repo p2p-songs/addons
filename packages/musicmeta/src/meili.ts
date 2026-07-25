@@ -56,6 +56,8 @@ interface CatalogDoc {
   name: string;
   description?: string;
   poster?: string;
+  /** Meilisearch relevance (0–1) when `showRankingScore` is requested. */
+  _rankingScore?: number;
 }
 
 export class MeiliSearchIndex implements SearchIndex {
@@ -83,7 +85,10 @@ export class MeiliSearchIndex implements SearchIndex {
       body = await this.req<{ hits: CatalogDoc[] }>(
         "POST",
         `/indexes/${this.index}/search`,
-        { q: query, limit, filter: `type = ${JSON.stringify(type)}` },
+        // showRankingScore attaches a 0–1 relevance to each hit, which the addon
+        // forwards as metaPreview.rankingScore so a client can merge the per-type
+        // catalog searches into one relevance-ordered list.
+        { q: query, limit, filter: `type = ${JSON.stringify(type)}`, showRankingScore: true },
         signal,
       );
     } catch (err) {
@@ -165,5 +170,6 @@ function docToPreview(d: CatalogDoc): unknown {
     name: d.name,
     ...(d.description ? { description: d.description } : {}),
     ...(poster ? { poster } : {}),
+    ...(typeof d._rankingScore === "number" ? { rankingScore: d._rankingScore } : {}),
   };
 }

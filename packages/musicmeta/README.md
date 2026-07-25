@@ -50,6 +50,10 @@ bieber", and "my world baby" all resolve to the song) with the artist's listen c
 as a popularity tiebreaker. Full design:
 [`p2p-songs/.github` — `docs/CATALOG_PIPELINE.md`](https://github.com/p2p-songs/.github/blob/main/docs/CATALOG_PIPELINE.md).
 
+Each `/catalog` search hit also carries an optional **`rankingScore`** (Meili's 0–1
+relevance) so a client can merge the per-type searches into one relevance-ordered
+list instead of per-type sections.
+
 **Meta** detail (`/meta/...` — album track listings with disc/position/duration) still
 enriches per-item from MusicBrainz: it is a bounded, cached, per-item lookup, not the
 scaling-critical search path, and it is the source of track ordering the curated search

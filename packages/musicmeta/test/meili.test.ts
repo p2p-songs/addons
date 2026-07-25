@@ -45,6 +45,21 @@ describe("MeiliSearchIndex (read-only)", () => {
     expect(calls[0]!.body).toMatchObject({ filter: 'type = "track"' });
   });
 
+  it("requests showRankingScore and forwards it as rankingScore", async () => {
+    const calls = install((_m, p) => {
+      if (p === "/indexes/catalog/search") {
+        return { status: 200, json: { hits: [{ docId: "x", id: REC, type: "track", name: "Baby", _rankingScore: 0.87 }] } };
+      }
+      return { status: 500, json: {} };
+    });
+    const index = new MeiliSearchIndex({ url: "http://meili:7700" });
+
+    const out = await index.search("track", "baby", 10);
+
+    expect(calls[0]!.body).toMatchObject({ showRankingScore: true });
+    expect(out[0]).toEqual({ type: "track", id: REC, name: "Baby", rankingScore: 0.87 });
+  });
+
   it("synthesizes a Cover Art Archive poster for album hits", async () => {
     install(() => ({ status: 200, json: { hits: [{ docId: "y", id: REL, type: "album", name: "My World 2.0" }] } }));
     const index = new MeiliSearchIndex({ url: "http://meili:7700" });
