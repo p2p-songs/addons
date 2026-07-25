@@ -74,7 +74,7 @@ export async function resolveStreams(
   if (allIndexersFailed) return { streams: [], outage: true };
   if (candidates.length === 0) return { streams: [], outage: false };
 
-  const ranked = rankCandidates(candidates, config);
+  const ranked = rankCandidates(candidates, track, config);
 
   // One read that answers "which of these does the user already have?". For the
   // second and later tracks of an album this is the whole story — track 1 left
@@ -241,14 +241,62 @@ function toStream(
 // --- ranking ---
 
 /** Score a torrent before we spend a debrid round-trip on it: prefer preferred formats, then seeders. */
-function rankCandidates(candidates: TorrentCandidate[], config: BitbopConfig): TorrentCandidate[] {
-  return [...candidates].sort((a, b) => candidateScore(b, config) - candidateScore(a, config));
+export function rankCandidates(
+  candidates: TorrentCandidate[],
+  track: TrackContext,
+  config: BitbopConfig,
+): TorrentCandidate[] {
+  return [...candidates].sort((a, b) => candidateScore(b, track, config) - candidateScore(a, track, config));
 }
 
-function candidateScore(c: TorrentCandidate, config: BitbopConfig): number {
+/**
+ * A Torznab `q=` search is fuzzy — for the album "1989" it also returns deluxe
+ * editions, discography packs and unrelated releases, and for a **self-titled**
+ * album the query is literally "Artist Artist", which matches *every* release by
+ * that artist. Format + seeders alone then pick the most-seeded of those, and
+ * `pickFile` faithfully returns that wrong album's track at the requested
+ * position (the "self-titled album plays a different song" bug). So album
+ * relevance must **dominate**: a candidate whose title matches the requested
+ * album (and year) always outranks a better-seeded one that doesn't; format and
+ * seeders only break ties *within* the right album.
+ */
+function candidateScore(c: TorrentCandidate, track: TrackContext, config: BitbopConfig): number {
   const formatRank = c.format ? formatPreference(c.format, config) : 0;
   const seeders = Math.log10((c.seeders ?? 0) + 1); // diminishing returns
-  return formatRank * 10 + seeders;
+  return albumRelevance(c.title, track) * 1000 + formatRank * 10 + seeders;
+}
+
+const normalizeText = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * How well a candidate title matches the requested album — the fraction of the
+ * album's tokens present, plus a decisive bonus when the album **year** appears.
+ * The year is what disambiguates a self-titled album (whose title alone matches
+ * every release by the artist) and a re-recording/reissue from the original.
+ * Absent album context (a bare recording) there is nothing to match on, so this
+ * is 0 and ranking falls back to format/seeders as before.
+ */
+function albumRelevance(title: string, track: TrackContext): number {
+  if (!track.album) return 0;
+  const t = ` ${normalizeText(title)} `;
+  const albumTokens = normalizeText(track.album).split(" ").filter(Boolean);
+  const present = albumTokens.filter((tok) => t.includes(` ${tok} `)).length;
+  const albumFraction = albumTokens.length > 0 ? present / albumTokens.length : 0;
+  const yearBonus = track.year !== undefined && t.includes(` ${track.year} `) ? 1 : 0;
+  // A multi-album pack matches the album tokens *and* the year (it spans them),
+  // but its track at the requested disc+position belongs to a different album, so
+  // deterministic selection returns the wrong song. Penalize it below any genuine
+  // single-album match. Keyword-based on purpose — a year-range heuristic would
+  // misfire on a normal title that carries album-number + release-year ("1989 2014").
+  const collectionPenalty = looksLikeCollection(t) ? 1.5 : 0;
+  return albumFraction + yearBonus - collectionPenalty;
+}
+
+/** True for a title that packs many albums together (its position-1 file isn't this album's). */
+function looksLikeCollection(paddedTitle: string): boolean {
+  return /\b(discography|discografia|complete|collection|anthology|box ?sets?|greatest hits|all albums)\b/.test(
+    paddedTitle,
+  );
 }
 
 /** Rank the final, resolved streams the same way (format preference, then seeders proxy in description). */

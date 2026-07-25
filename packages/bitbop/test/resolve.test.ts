@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveStreams } from "../src/resolve.js";
+import { resolveStreams, rankCandidates } from "../src/resolve.js";
 import type { ResolveDeps } from "../src/resolve.js";
 import { parseConfig, type BitbopConfig } from "../src/config.js";
 import type { MetadataLookup, TrackContext } from "../src/metadata.js";
@@ -258,5 +258,75 @@ describe("resolveStreams — ranking and caps", () => {
     const b = indexerOf([{ ...candidate, seeders: 99 }]);
     const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [a, b] }));
     expect(result.streams).toHaveLength(1); // one hash → one stream
+  });
+});
+
+describe("rankCandidates — album relevance dominates seeders/format", () => {
+  const cfg = config();
+  const c = (title: string, seeders: number, format = "FLAC"): TorrentCandidate => ({
+    indexer: "fake",
+    title,
+    infoHash: HASH,
+    seeders,
+    format,
+  });
+
+  it("self-titled album: the year picks the right release over a better-seeded namesake", () => {
+    // "Taylor Swift" by Taylor Swift → query "Taylor Swift Taylor Swift" matches
+    // every release by her; only the year separates the 2006 debut from 1989.
+    const selfTitled: TrackContext = {
+      artist: "Taylor Swift",
+      album: "Taylor Swift",
+      year: 2006,
+      title: "Tim McGraw",
+      disc: 1,
+      position: "1",
+      hasAlbumContext: true,
+    };
+    const ranked = rankCandidates(
+      [
+        c("Taylor Swift - 1989 (2014) [FLAC]", 5000), // far more seeded, wrong album
+        c("Taylor Swift - Taylor Swift (2006) [FLAC]", 20), // the debut
+      ],
+      selfTitled,
+      cfg,
+    );
+    expect(ranked[0]!.title).toContain("2006");
+  });
+
+  it("demotes a discography pack below the genuine single album", () => {
+    const selfTitled: TrackContext = {
+      artist: "Taylor Swift",
+      album: "Taylor Swift",
+      year: 2006,
+      title: "Tim McGraw",
+      disc: 1,
+      position: "1",
+      hasAlbumContext: true,
+    };
+    const ranked = rankCandidates(
+      [
+        c("Taylor Swift - Discography (2006-2022) [FLAC]", 9000), // spans 2006, hugely seeded
+        c("Taylor Swift - Taylor Swift (2006) [FLAC]", 15),
+      ],
+      selfTitled,
+      cfg,
+    );
+    expect(ranked[0]!.title).toContain("Taylor Swift (2006)");
+  });
+
+  it("normal album: a title matching the album beats a better-seeded other album", () => {
+    const ranked = rankCandidates(
+      [c("Daft Punk - Random Access Memories [FLAC]", 8000), c("Daft Punk - Discovery [FLAC]", 30)],
+      track, // album "Discovery"
+      cfg,
+    );
+    expect(ranked[0]!.title).toContain("Discovery");
+  });
+
+  it("bare recording (no album context): falls back to seeders/format, no regression", () => {
+    const bare: TrackContext = { artist: "Daft Punk", title: "Digital Love", hasAlbumContext: false };
+    const ranked = rankCandidates([c("some torrent", 10), c("another torrent", 9000)], bare, cfg);
+    expect(ranked[0]!.seeders).toBe(9000);
   });
 });

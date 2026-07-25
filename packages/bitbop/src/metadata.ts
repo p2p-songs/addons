@@ -32,6 +32,14 @@ export interface TrackContext {
   albumArtist?: string;
   /** Album/release title to search indexers by, when we have one. */
   album?: string;
+  /**
+   * The album's release **year**, from album context. It is the discriminator a
+   * bare album title can't provide: a **self-titled** album's title *is* the
+   * artist name, so an indexer query ("Taylor Swift Taylor Swift") matches every
+   * release by that artist — only the year separates the 2006 debut from 1989.
+   * Used to rank candidates, not to query (indexers don't always tag the year).
+   */
+  year?: number;
   /** The track/recording title. */
   title: string;
   durationMs?: number;
@@ -68,6 +76,9 @@ export class MusicBrainzLookup implements MetadataLookup {
             artist: track.artist ?? release.artist,
             albumArtist: release.artist,
             album: release.title,
+            ...(albumYear(release.groupFirstReleaseDate ?? release.date) !== undefined
+              ? { year: albumYear(release.groupFirstReleaseDate ?? release.date) }
+              : {}),
             title: track.title,
             ...(track.durationMs ? { durationMs: track.durationMs } : {}),
             disc: track.disc,
@@ -90,6 +101,12 @@ export class MusicBrainzLookup implements MetadataLookup {
       hasAlbumContext: false,
     };
   }
+}
+
+/** Extract a 4-digit year from a MusicBrainz date (`2006`, `2006-11`, `2006-11-24`). */
+function albumYear(date: string | undefined): number | undefined {
+  const m = date?.match(/^(\d{4})/);
+  return m ? Number(m[1]) : undefined;
 }
 
 /** Prefer the exact trackId; else the recording's appearance on the release. */

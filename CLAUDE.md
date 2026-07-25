@@ -120,6 +120,22 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   keeps the release credit for **grouping only** (a `bingeGroup` must be stable
   across an album, so it can't key on a per-track artist). Found live against
   Prowlarr, where the query went out as `"Various Artists The Baroque, Volume 1"`.
+  **Candidate ranking is album-relevance-first, not seeders-first
+  (`candidateScore`, `resolve.ts`; 2026-07-25).** A Torznab `q=` search is fuzzy,
+  so it returns other albums/deluxe editions/**discography packs** alongside the
+  one asked for; ranking by format+seeders alone then picks the most-seeded, and
+  `pickFile` faithfully returns *that* album's track at the requested position —
+  the wrong song. **Self-titled albums were the live failure**: the query is
+  `"Taylor Swift Taylor Swift"`, which matches every release by her, so the debut
+  played a different song. Fix: `albumRelevance(title, track)` scores the fraction
+  of album tokens present **+ a decisive bonus when the album `year` appears**
+  (the only thing that separates a self-titled debut `(2006)` from `1989`), and
+  **penalizes collection/discography packs** (keyword-based — a year-range
+  heuristic misfires on a normal `1989 (2014)` title); this term is weighted
+  `×1000` so it dominates, with format/seeders only breaking ties *within* the
+  right album. `year` rides on `TrackContext` from `getRelease`'s
+  `groupFirstReleaseDate`. No album context (a bare recording) ⇒ relevance 0 ⇒
+  unchanged seeders/format ranking.
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with
