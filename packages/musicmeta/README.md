@@ -52,7 +52,13 @@ as a popularity tiebreaker. Full design:
 
 Each `/catalog` search hit also carries an optional **`rankingScore`** (Meili's 0–1
 relevance) so a client can merge the per-type searches into one relevance-ordered
-list instead of per-type sections.
+list instead of per-type sections. A **track** hit additionally carries its
+**`releaseId`** — the album context a stream addon needs to resolve a *search*
+result playably (a bare recording is on many releases, so without it discovery is
+artist+title alone and file selection is a guess; with it the search is
+album-scoped and the file is picked by the recording's position on that release,
+exactly like a track played from an album). It comes from the stored doc, and is
+recovered from the Cover Art Archive poster URL for pre-`releaseId` documents.
 
 **Meta** detail (`/meta/...` — album track listings with disc/position/duration) still
 enriches per-item from MusicBrainz: it is a bounded, cached, per-item lookup, not the

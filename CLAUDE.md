@@ -222,6 +222,19 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   (per-type counts via Meili's `type` facet, wired through the SDK's `serveHTTP`
   `extraRoutes`) for the player's catalogue-size indicator.
 
+  **A track search hit carries album context — `releaseId` (2026-07-25).** Without
+  it a *search*-play sent a bare recording, and a stream addon (Bitbop) resolving a
+  bare recording searches indexers by artist+title alone: a much-pressed old song
+  (dozens of comps/promos/live/discography packs) can't be picked, while a new
+  single-release song can — the "plays from the album screen, not from search" gap,
+  and the "SWAG 2 plays but 2010 albums don't" report. `catalog-builder` stores
+  `releaseId` (`mbid:release:<uuid>`, the canonical release the dump pairs with the
+  recording) on every track doc; `meili.ts` also recovers it from the poster URL
+  for pre-field docs, so it works against the current index without a rebuild. With
+  it, `metadata.ts` resolves `getRelease` → `matchTrack` by recording id → disc+
+  position → deterministic file pick, identical to an album-screen play. `releaseId`
+  is a new optional `metaPreview` field, track previews only.
+
   **Hosting (2026-07-23):** ready-to-run assets in `deploy/` — `docker-compose.yml`
   (musicmeta + a private Meilisearch on one box), a Railway two-service setup,
   off-box Meili backups, and the Cloudflare edge (cache rule on catalog responses

@@ -51,6 +51,15 @@ export interface CatalogDoc {
   description?: string;
   /** Album title — set on tracks only. */
   album?: string;
+  /**
+   * The track's release id (`mbid:release:<uuid>`) — set on tracks only. This is
+   * the **album context** a stream addon needs to resolve a track *search* hit
+   * playably: a bare recording is on many releases, so without it discovery is
+   * artist+title alone and file selection is a guess. With it, the stream addon
+   * scopes the search to this release and picks the file by the recording's
+   * position on it — the same context a track played from an album carries.
+   */
+  releaseId?: string;
   /** Cover Art Archive poster URL — set on albums and tracks. */
   poster?: string;
 }
@@ -171,7 +180,7 @@ export function docsFromRows(
         album: row.releaseName,
         searchtext: `${credit} ${row.releaseName} ${row.recordingName}`,
         score: score + (recordingPopularity.get(row.recordingMbid) ?? 0),
-        ...(row.releaseMbid ? { poster: coverUrl(row.releaseMbid) } : {}),
+        ...(row.releaseMbid ? { releaseId: `mbid:release:${row.releaseMbid}`, poster: coverUrl(row.releaseMbid) } : {}),
       });
     }
 

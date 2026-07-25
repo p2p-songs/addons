@@ -60,6 +60,43 @@ describe("MeiliSearchIndex (read-only)", () => {
     expect(out[0]).toEqual({ type: "track", id: REC, name: "Baby", rankingScore: 0.87 });
   });
 
+  it("carries a track's stored releaseId as album context for playback", async () => {
+    install(() => ({
+      status: 200,
+      json: { hits: [{ docId: "x", id: REC, type: "track", name: "Baby", releaseId: REL }] },
+    }));
+    const index = new MeiliSearchIndex({ url: "http://meili:7700" });
+
+    const out = await index.search("track", "baby", 10);
+
+    expect(out[0]).toMatchObject({ type: "track", id: REC, releaseId: REL });
+  });
+
+  it("recovers a track's releaseId from its poster URL when no field is stored", async () => {
+    // Documents from before the releaseId field carry only a Cover Art Archive
+    // poster, whose URL embeds the release MBID — enough to reconstruct the
+    // album context so playback works against the current live index.
+    install(() => ({
+      status: 200,
+      json: {
+        hits: [
+          {
+            docId: "x",
+            id: REC,
+            type: "track",
+            name: "Baby",
+            poster: "https://coverartarchive.org/release/22222222-2222-4222-8222-222222222222/front-500",
+          },
+        ],
+      },
+    }));
+    const index = new MeiliSearchIndex({ url: "http://meili:7700" });
+
+    const out = await index.search("track", "baby", 10);
+
+    expect(out[0]).toMatchObject({ releaseId: REL });
+  });
+
   it("synthesizes a Cover Art Archive poster for album hits", async () => {
     install(() => ({ status: 200, json: { hits: [{ docId: "y", id: REL, type: "album", name: "My World 2.0" }] } }));
     const index = new MeiliSearchIndex({ url: "http://meili:7700" });

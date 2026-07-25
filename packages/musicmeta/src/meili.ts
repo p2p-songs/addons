@@ -56,6 +56,14 @@ interface CatalogDoc {
   name: string;
   description?: string;
   poster?: string;
+  /** Album title — set on tracks (from the canonical release). */
+  album?: string;
+  /**
+   * The track's release id (`mbid:release:<uuid>`) — the album context a stream
+   * addon needs to resolve a track search hit playably. Written by newer builds;
+   * for older documents it is recovered from the poster URL (see `docToPreview`).
+   */
+  releaseId?: string;
   /** Meilisearch relevance (0–1) when `showRankingScore` is requested. */
   _rankingScore?: number;
 }
@@ -156,6 +164,12 @@ function isIndexMissing(err: unknown): boolean {
   return err instanceof MeiliError && err.status === 404;
 }
 
+/** Recover a `mbid:release:<uuid>` from a Cover Art Archive poster URL, if it is one. */
+function releaseIdFromPoster(poster: string | undefined): string | undefined {
+  const m = poster?.match(/coverartarchive\.org\/release\/([0-9a-fA-F-]{36})\b/);
+  return m ? `mbid:release:${m[1]!.toLowerCase()}` : undefined;
+}
+
 function docToPreview(d: CatalogDoc): unknown {
   // Albums get a deterministic Cover Art Archive poster from their release id
   // (the curated documents store none); other types keep whatever they carry.
@@ -164,12 +178,18 @@ function docToPreview(d: CatalogDoc): unknown {
     const { uuid } = parseMbid(d.id);
     if (uuid) poster = releaseFrontCover(uuid);
   }
+  // A track carries its release as **album context** so a stream addon can
+  // resolve a search hit the same way it resolves one played from an album
+  // (album-scoped search + file selection by position). Prefer the stored field;
+  // fall back to the release id embedded in the poster URL for older documents.
+  const releaseId = d.type === "track" ? (d.releaseId ?? releaseIdFromPoster(poster)) : undefined;
   return {
     type: d.type,
     id: d.id,
     name: d.name,
     ...(d.description ? { description: d.description } : {}),
     ...(poster ? { poster } : {}),
+    ...(releaseId ? { releaseId } : {}),
     ...(typeof d._rankingScore === "number" ? { rankingScore: d._rankingScore } : {}),
   };
 }
