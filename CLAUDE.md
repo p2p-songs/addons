@@ -150,6 +150,20 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   bare recording (no album context) scores 0 / isn't gated → unchanged
   seeders/format ranking. `BITBOP_DEBUG=1` logs the resolved album/year and each
   candidate's score + keep/drop — how this was diagnosed.
+  **Within the right album, `candidateScore` is speed-first (2026-07-26).**
+  Album relevance still dominates (`×1000`, the whole self-titled fix), but the
+  tiebreak *inside* the winning album is now **seeders first, format last** —
+  reversed from the original format-first order. The score is
+  `albumRelevance×1000 + log10(seeders+1)×100 + formatRank`: seeders drive it
+  (an uncached torrent with more peers downloads faster, so the user hears the
+  song sooner — the `downloadUncached` path picks the first relevant candidate,
+  which is now the best-seeded), `log10` models real download speed (1→10 peers
+  matters far more than 100→1000) and keeps even 100k seeders ≈500, safely under
+  the `×1000` album band so speed can never promote a wrong-album torrent, and
+  format only breaks ties between comparably-seeded rips. Note this is the
+  *candidate/torrent* choice; `pickFile`'s FLAC-over-MP3 preference for the
+  *file* inside an already-chosen torrent is unchanged (quality once the bytes
+  are already local).
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with

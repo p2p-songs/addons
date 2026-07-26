@@ -340,7 +340,7 @@ function toStream(
 
 // --- ranking ---
 
-/** Score a torrent before we spend a debrid round-trip on it: prefer preferred formats, then seeders. */
+/** Score a torrent before we spend a debrid round-trip on it: within the right album, prefer well-seeded (faster to fetch), then format. */
 export function rankCandidates(
   candidates: TorrentCandidate[],
   track: TrackContext,
@@ -357,13 +357,22 @@ export function rankCandidates(
  * `pickFile` faithfully returns that wrong album's track at the requested
  * position (the "self-titled album plays a different song" bug). So album
  * relevance must **dominate**: a candidate whose title matches the requested
- * album (and year) always outranks a better-seeded one that doesn't; format and
- * seeders only break ties *within* the right album.
+ * album (and year) always outranks a better-seeded one that doesn't.
+ *
+ * *Within* the right album we optimize for **speed**: seeders are the primary
+ * tiebreak (an uncached torrent with more peers downloads faster, so the user
+ * hears the song sooner), and format is only the last tiebreak among
+ * comparably-seeded candidates — a reversal of the earlier format-first order,
+ * which let a 1-seeder FLAC lose the download race to nothing while an 8-seeder
+ * rip sat behind it. The seeders term is `log10`-scaled ×100: diminishing
+ * returns model real download speed (1→10 peers matters far more than
+ * 100→1000), and even 100k seeders stay ≈500 — comfortably under the ×1000
+ * album band, so speed can never promote a wrong-album torrent.
  */
 function candidateScore(c: TorrentCandidate, track: TrackContext, config: BitbopConfig): number {
   const formatRank = c.format ? formatPreference(c.format, config) : 0;
-  const seeders = Math.log10((c.seeders ?? 0) + 1); // diminishing returns
-  return albumRelevance(c.title, track) * 1000 + formatRank * 10 + seeders;
+  const seeders = Math.log10((c.seeders ?? 0) + 1); // diminishing returns, bounded well under the album band
+  return albumRelevance(c.title, track) * 1000 + seeders * 100 + formatRank;
 }
 
 const normalizeText = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();

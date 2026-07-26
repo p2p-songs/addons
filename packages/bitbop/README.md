@@ -116,7 +116,13 @@ candidate on the user's account and returns a **`resolving`** marker (with
 progress) instead of a no-match; the player shows "Downloading…" and re-resolves
 until it's ready. This reverses an earlier cached-only contract — which held
 because a player couldn't wait on a download mid-queue — now that the stream
-response can say `resolving` and the player waits on it. It downloads the **whole
+response can say `resolving` and the player waits on it. The candidate it starts
+is the **best-seeded** one of the requested album, because ranking is
+**speed-first within the album**: `candidateScore` breaks ties by seeders before
+format (a `log10`-scaled term so 1→10 peers dominates 100→1000), so the download
+that lands soonest wins — album relevance still dominates the score, so speed
+never pulls in the wrong album, and a comparably-seeded FLAC still beats an MP3.
+It downloads the **whole
 album** (all audio), not a single file: on Real-Debrid a torrent's files are only
 servable once its entire selected set completes, so selecting one file would make
 every *other* track of that album unplayable — and fetching the album makes the

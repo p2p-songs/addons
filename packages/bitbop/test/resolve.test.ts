@@ -349,6 +349,33 @@ describe("rankCandidates — album relevance dominates seeders/format", () => {
     const ranked = rankCandidates([c("some torrent", 10), c("another torrent", 9000)], bare, cfg);
     expect(ranked[0]!.seeders).toBe(9000);
   });
+
+  it("within the right album, prefers the better-seeded release over format (speed-first)", () => {
+    // Both are the requested album, so relevance ties and the tiebreak decides.
+    // A well-seeded MP3 downloads sooner than a near-dead FLAC, so it wins — the
+    // earlier format-first order lost this race.
+    const ranked = rankCandidates(
+      [
+        c("Daft Punk - Discovery [FLAC]", 2, "FLAC"), // preferred format, barely seeded
+        c("Daft Punk - Discovery [MP3]", 800, "MP3"), // lesser format, well seeded
+      ],
+      track, // album "Discovery"
+      cfg,
+    );
+    expect(ranked[0]!.format).toBe("MP3");
+  });
+
+  it("format still breaks ties between comparably-seeded releases of the album", () => {
+    const ranked = rankCandidates(
+      [
+        c("Daft Punk - Discovery [MP3]", 50, "MP3"),
+        c("Daft Punk - Discovery [FLAC]", 50, "FLAC"),
+      ],
+      track,
+      cfg,
+    );
+    expect(ranked[0]!.format).toBe("FLAC");
+  });
 });
 
 describe("keepRelevantCandidates — gate out different albums", () => {
