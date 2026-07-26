@@ -137,8 +137,19 @@ export interface DebridProvider {
    * (any status) before adding. A torrent that is dead / has no audio is cleaned
    * up and reported `dead`. Optional — a provider without it leaves Bitbop
    * cached-only. Rejects on transport/auth failure.
+   *
+   * `pickFiles`, when given, chooses **which files to download** from the
+   * torrent's full list (the caller picks just the requested track, so a
+   * single-song play doesn't pull the whole album); returning none falls back to
+   * all audio. Only consulted when the torrent is freshly added — an existing
+   * download's selection is left as-is.
    */
-  startDownload?(ref: TorrentRef, apiKey: string, signal?: AbortSignal): Promise<DownloadStatus>;
+  startDownload?(
+    ref: TorrentRef,
+    apiKey: string,
+    signal?: AbortSignal,
+    pickFiles?: (files: DebridFile[]) => string[],
+  ): Promise<DownloadStatus>;
 }
 
 /** Raised when a provider call fails in a way worth distinguishing (auth vs. transient). */

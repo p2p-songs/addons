@@ -28,7 +28,7 @@ import type { Resolving, Stream, StreamRequest } from "@p2p-songs/addon-sdk";
 import type { BitbopConfig } from "./config.js";
 import type { MetadataLookup, TrackContext } from "./metadata.js";
 import type { Indexer, TorrentCandidate } from "./indexers/types.js";
-import type { DebridProvider, TorrentRef } from "./debrid/types.js";
+import type { DebridFile, DebridProvider, TorrentRef } from "./debrid/types.js";
 import { DebridError } from "./debrid/types.js";
 import { pickFile, type FileMatch } from "./pick-file.js";
 import { detectFormat } from "./format.js";
@@ -181,8 +181,15 @@ async function maybeStartDownload(
   const candidate = relevant.find((c) => (c.seeders ?? 0) >= config.downloadSeedersFloor);
   if (!candidate) return undefined;
 
+  // Download just the requested track's file, not the whole album — a single-song
+  // play shouldn't wait on every other track. Falls back to all audio if the file
+  // can't be identified (no album context / ambiguous), same as `pickFile` elsewhere.
+  const pickFiles = (files: DebridFile[]): string[] => {
+    const match = pickFile(files, track, config.preferFormats);
+    return match ? [match.file.id] : [];
+  };
   try {
-    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal);
+    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal, pickFiles);
     if (process.env.BITBOP_DEBUG) {
       console.error(
         `[bitbop]   download ${status.done ? "DONE" : status.dead ? "dead" : `${Math.round((status.progress ?? 0) * 100)}%`}: ${candidate.title}`,

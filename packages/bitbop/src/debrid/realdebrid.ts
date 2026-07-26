@@ -173,6 +173,18 @@ export class RealDebridProvider implements DebridProvider {
         : { cached: false };
     }
 
+    // Already on the account (e.g. a download this addon started on a prior poll)?
+    // Check it in place — never add a duplicate, never delete a torrent we didn't
+    // add. This is what stops each poll of a downloading track from re-adding and
+    // deleting the same hash (which churned RD and fought the real download).
+    const existing = await this.findAnyByHash(ref.infoHash, apiKey, signal);
+    if (existing) {
+      const info = await this.info(existing, apiKey, signal);
+      return info.status === STATUS_DOWNLOADED
+        ? { cached: true, files: selectedFiles(info), handle: existing }
+        : { cached: false };
+    }
+
     // Start the clock *before* the add: the add, the first info, and the
     // selection call are three round-trips that must come out of the budget,
     // not sit outside it.
@@ -220,7 +232,12 @@ export class RealDebridProvider implements DebridProvider {
     return resolved;
   }
 
-  async startDownload(ref: TorrentRef, apiKey: string, signal?: AbortSignal): Promise<DownloadStatus> {
+  async startDownload(
+    ref: TorrentRef,
+    apiKey: string,
+    signal?: AbortSignal,
+    pickFiles?: (files: DebridFile[]) => string[],
+  ): Promise<DownloadStatus> {
     // Reuse an existing download for this hash before adding — RD's addMagnet does
     // not dedupe, so without this a re-poll (the player re-resolving while it
     // downloads) would add the same torrent again and again.
@@ -240,7 +257,7 @@ export class RealDebridProvider implements DebridProvider {
     const deadline = this.now() + this.settleBudgetMs;
     const id = await this.addMagnet(ref.infoHash, apiKey, signal);
     try {
-      const info = await this.selectAudioAndSettle(id, apiKey, deadline, signal);
+      const info = await this.selectAudioAndSettle(id, apiKey, deadline, signal, pickFiles);
       if (info.status === "no_audio_files") {
         await this.deleteQuietly(id, apiKey);
         return { handle: id, done: false, dead: true };
@@ -309,6 +326,8 @@ export class RealDebridProvider implements DebridProvider {
     /** Absolute deadline set by the caller, before the torrent was even added. */
     deadline: number,
     signal?: AbortSignal,
+    /** Choose which files to select; defaults to all audio. Returning none falls back to all audio. */
+    pickFiles?: (files: DebridFile[]) => string[],
   ): Promise<RdInfo> {
     let info = await this.info(id, apiKey, signal);
 
@@ -326,7 +345,11 @@ export class RealDebridProvider implements DebridProvider {
       // No audio at all: selecting nothing would be an error, and this torrent
       // can never serve a track. Treat as a miss and let the caller clean up.
       if (audioIds.length === 0) return { ...info, status: "no_audio_files" };
-      await this.post(`/torrents/selectFiles/${encodeURIComponent(id)}`, { files: audioIds.join(",") }, apiKey, signal);
+      // A caller can narrow the download to just the file it needs (one track,
+      // not the whole album); an empty pick falls back to all audio.
+      const picked = pickFiles?.(info.files.map(toDebridFile)).filter((fid) => audioIds.includes(fid));
+      const selectIds = picked && picked.length > 0 ? picked : audioIds;
+      await this.post(`/torrents/selectFiles/${encodeURIComponent(id)}`, { files: selectIds.join(",") }, apiKey, signal);
       info = await this.info(id, apiKey, signal);
     }
 
@@ -473,6 +496,13 @@ function linkForFile(info: RdInfo, fileId: string): string {
   const link = info.links[idx];
   if (!link) throw new DebridError("selected file has no resolvable link");
   return link;
+}
+
+/** Map one RD file to the port's DebridFile shape. */
+function toDebridFile(f: RdFile): DebridFile {
+  const file: DebridFile = { id: String(f.id), path: f.path.replace(/^\//, "") };
+  if (typeof f.bytes === "number") file.sizeBytes = f.bytes;
+  return file;
 }
 
 /** The files RD has selected (audio-vs-art filtering happens later in `pickFile`). */

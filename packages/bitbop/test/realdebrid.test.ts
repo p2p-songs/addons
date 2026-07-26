@@ -144,6 +144,17 @@ describe("RealDebridProvider.checkCache", () => {
     expect(fake.torrents.size).toBe(0);
   });
 
+  it("checks an existing account torrent in place — no re-add, no delete", async () => {
+    // A download this addon started on a prior poll is already on the account.
+    // Re-adding it each poll churned RD and fought the real download.
+    const fake = fakeRd({ accountList: [{ id: "A", hash: HASH, status: "downloading" }], settledStatus: "downloading" });
+    const result = await providerOf(fake).checkCache({ infoHash: HASH }, "RDKEY");
+
+    expect(result.cached).toBe(false);
+    expect(fake.calls.some((c) => c.path.includes("addMagnet"))).toBe(false);
+    expect(fake.calls.some((c) => c.path.includes("/torrents/delete/"))).toBe(false); // never delete what we didn't add
+  });
+
   it("deletes what it added when the torrent has no audio files at all", async () => {
     const fake = fakeRd({ files: [{ id: 0, path: "/Album/scans.rar" }, { id: 1, path: "/Album/cover.jpg" }] });
     const result = await providerOf(fake).checkCache({ infoHash: HASH }, "RDKEY");
@@ -217,6 +228,39 @@ describe("RealDebridProvider.checkCache", () => {
 
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((h) => h === "Bearer USER-OWN-KEY")).toBe(true);
+  });
+});
+
+describe("RealDebridProvider.startDownload", () => {
+  it("keeps the download and selects only the picked file, not the whole album", async () => {
+    const fake = fakeRd({ settledStatus: "downloading" });
+    const status = await providerOf(fake).startDownload({ infoHash: HASH }, "RDKEY", undefined, (files) => [files[1]!.id]);
+
+    expect(status.done).toBe(false);
+    const select = fake.calls.find((c) => c.path.includes("/selectFiles/"))!;
+    expect(new URLSearchParams(select.body!).get("files")).toBe("1"); // just track 2, not "0,1"
+    expect(fake.calls.some((c) => c.path.includes("/torrents/delete/"))).toBe(false); // kept downloading
+  });
+
+  it("falls back to all audio when the picker can't identify the file", async () => {
+    const fake = fakeRd({ settledStatus: "downloading" });
+    await providerOf(fake).startDownload({ infoHash: HASH }, "RDKEY", undefined, () => []);
+    const select = fake.calls.find((c) => c.path.includes("/selectFiles/"))!;
+    expect(new URLSearchParams(select.body!).get("files")).toBe("0,1");
+  });
+
+  it("reuses an in-progress download by hash instead of adding again", async () => {
+    const fake = fakeRd({ accountList: [{ id: "A", hash: HASH, status: "downloading" }], settledStatus: "downloading" });
+    const status = await providerOf(fake).startDownload({ infoHash: HASH }, "RDKEY");
+
+    expect(status.handle).toBe("A");
+    expect(fake.calls.some((c) => c.path.includes("addMagnet"))).toBe(false);
+  });
+
+  it("reports done with files once the download completes", async () => {
+    const status = await providerOf(fakeRd({ settledStatus: "downloaded" })).startDownload({ infoHash: HASH }, "RDKEY");
+    expect(status.done).toBe(true);
+    expect(status.files?.length).toBeGreaterThan(0);
   });
 });
 
