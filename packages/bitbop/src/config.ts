@@ -59,13 +59,26 @@ export const bitbopConfigSchema = z.object({
   /** The user's own Torznab indexers. At least one, or discovery has nothing to query. */
   indexers: z.array(indexerConfigSchema).min(1),
   /**
-   * **Cached-only is not a setting — it's the contract.** Resolving an uncached
-   * torrent means asking the provider to start a download and polling for it,
-   * which a player cannot wait on mid-queue. An "include uncached" option
-   * therefore existed but could never yield a stream (the resolver rejects any
-   * torrent whose status isn't `downloaded`), so it was removed rather than
-   * left as a switch that silently does nothing (audit A-011).
+   * **Download a promising uncached torrent and report progress**, instead of
+   * only ever serving already-cached ones.
+   *
+   * This reverses the earlier cached-only contract. That contract held for a real
+   * reason — resolving an uncached torrent means starting a download and polling
+   * for it, which *a player cannot wait on mid-queue* — and an "include uncached"
+   * switch that could never yield a stream was removed under audit A-011. What
+   * changed: the stream response can now say **`resolving`** (progress), and the
+   * player waits on that (a "Downloading on debrid…" state that re-resolves)
+   * rather than blocking. So the switch now does something real. On by default;
+   * set false to keep the account strictly cached-only.
    */
+  downloadUncached: z.boolean().default(true),
+  /**
+   * Minimum indexer-reported seeders before Bitbop will *start* downloading an
+   * uncached torrent. A near-dead torrent may never finish, so it's left alone
+   * (the request simply finds no source) rather than parked half-done on the
+   * account. Ranking still uses seeders; this is only the download threshold.
+   */
+  downloadSeedersFloor: z.number().int().nonnegative().default(1),
   /** Preferred audio formats, best first. Used for ranking only, never as a filter. */
   preferFormats: z.array(z.string()).default(["FLAC", "MP3"]),
   /** Cap on returned streams. */
@@ -100,6 +113,8 @@ export function redactConfig(config: BitbopConfig): Record<string, unknown> {
     indexers: config.indexers.map((i) => ({ name: i.name ?? hostOf(i.url), url: "[redacted]", apiKey: "[redacted]" })),
     preferFormats: config.preferFormats,
     maxResults: config.maxResults,
+    downloadUncached: config.downloadUncached,
+    downloadSeedersFloor: config.downloadSeedersFloor,
   };
 }
 

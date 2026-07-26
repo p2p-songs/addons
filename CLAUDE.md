@@ -185,8 +185,13 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   `/torrents/instantAvailability`, and the state machine that replaced it only
   reports `downloaded` *after* file selection — which is also what **starts a
   download**. So a cache check is unavoidably a write, and the rules exist to
-  make that write safe: anything the addon adds to check is **deleted unless
-  cached** (never a torrent the user already had); selection is **audio-only,
+  make that write safe: anything the addon adds **to check** is **deleted unless
+  cached** (never a torrent the user already had) — with **one deliberate
+  exception**: `startDownload` (the `downloadUncached` feature, 2026-07-26)
+  *keeps* an in-progress download because the user pressed play, reporting a
+  `resolving`/progress marker the player waits on; it still finds an existing
+  download by hash before adding (RD's `addMagnet` doesn't dedupe) and still
+  deletes a dead/no-audio torrent. selection is **audio-only,
   never `files=all`**, so a miss can't cost a whole album; the torrent id is
   **threaded from `checkCache` into `resolveFile`** via `TorrentRef.handle` so
   one resolution never adds twice; a **non-mutating `GET /torrents` pre-pass**

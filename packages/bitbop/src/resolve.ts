@@ -24,7 +24,7 @@
  * Everything is injected (metadata, indexers, provider) so the pipeline is unit
  * tested without network, a debrid account, or a live indexer.
  */
-import type { Stream, StreamRequest } from "@p2p-songs/addon-sdk";
+import type { Resolving, Stream, StreamRequest } from "@p2p-songs/addon-sdk";
 import type { BitbopConfig } from "./config.js";
 import type { MetadataLookup, TrackContext } from "./metadata.js";
 import type { Indexer, TorrentCandidate } from "./indexers/types.js";
@@ -45,7 +45,17 @@ export interface ResolveResult {
   streams: Stream[];
   /** True when every discovery source failed, or the debrid credential was rejected — a real outage. */
   outage: boolean;
+  /**
+   * Present when no stream is ready *yet* but a download was started on the
+   * account (`config.downloadUncached`). The player shows "Downloading…" and
+   * re-resolves rather than treating it as a no-match. Empty `streams` + this =
+   * "coming"; empty `streams` + absent = "nothing found".
+   */
+  resolving?: Resolving;
 }
+
+/** How long the player should wait before re-resolving a downloading track. */
+const DOWNLOAD_RETRY_SECONDS = 10;
 
 /**
  * How many discovered torrents we probe against debrid, best-first.
@@ -141,8 +151,63 @@ export async function resolveStreams(
     if (authFailed) return { streams: [], outage: true };
     // Every candidate we tried failed for a provider-side reason → retryable.
     if (probed > 0 && providerFailures === probed) return { streams: [], outage: true };
+
+    // Nothing cached. If enabled, start (or resume) a download of the best
+    // promising candidate and tell the player to wait, instead of reporting a
+    // no-match. Album-scoped by nature: every track of an album resolves to the
+    // same top candidate, so track 1 starts the download and the rest find it
+    // in progress (by hash) — one download per album, no pile-up.
+    const download = await maybeStartDownload(relevant, track, config, deps.provider, signal);
+    if (download) return download;
   }
   return { streams: rankStreams(streams, config), outage: false };
+}
+
+/**
+ * Begin (or continue) downloading the best uncached-but-promising candidate on
+ * the user's account and return a `resolving` result, or `undefined` when there's
+ * nothing worth downloading (feature off, provider can't, or no candidate clears
+ * the seeders floor). If the download has *just* completed, resolve it to a real
+ * stream instead.
+ */
+async function maybeStartDownload(
+  relevant: TorrentCandidate[],
+  track: TrackContext,
+  config: BitbopConfig,
+  provider: DebridProvider,
+  signal?: AbortSignal,
+): Promise<ResolveResult | undefined> {
+  if (!config.downloadUncached || !provider.startDownload) return undefined;
+  const candidate = relevant.find((c) => (c.seeders ?? 0) >= config.downloadSeedersFloor);
+  if (!candidate) return undefined;
+
+  try {
+    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal);
+    if (process.env.BITBOP_DEBUG) {
+      console.error(
+        `[bitbop]   download ${status.done ? "DONE" : status.dead ? "dead" : `${Math.round((status.progress ?? 0) * 100)}%`}: ${candidate.title}`,
+      );
+    }
+    if (status.dead) return undefined; // unusable torrent, cleaned up — treat as no-match
+    if (status.done) {
+      // Completed between the cache probe and now: resolve it for real.
+      const stream = await resolveCandidate(candidate, track, config, provider, status.handle, signal);
+      return stream ? { streams: [stream], outage: false } : undefined;
+    }
+    return {
+      streams: [],
+      outage: false,
+      resolving: {
+        message: "Downloading on debrid",
+        retryAfter: DOWNLOAD_RETRY_SECONDS,
+        ...(status.progress !== undefined ? { progress: status.progress } : {}),
+      },
+    };
+  } catch (error) {
+    // A rejected key here is the same outage the cache probe would report.
+    if (error instanceof DebridError && error.isAuth) return { streams: [], outage: true };
+    return undefined; // transient — let the player retry as a plain no-match
+  }
 }
 
 // --- discovery ---

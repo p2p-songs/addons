@@ -84,7 +84,7 @@ export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
       if (!resolveDeps) return { streams: [], cacheMaxAge: 300 };
 
       try {
-        const { streams, outage } = await resolveStreams(
+        const { streams, outage, resolving } = await resolveStreams(
           { recordingId: args.recordingId, ...(args.trackId ? { trackId: args.trackId } : {}), ...(args.releaseId ? { releaseId: args.releaseId } : {}) },
           config,
           resolveDeps,
@@ -92,6 +92,10 @@ export function createBitbopAddon(deps: BitbopDeps): AddonInterface {
         // Total outage → throw so the SDK returns an uncacheable 500 (a transient
         // failure never poisons a cache with a long-lived "no streams").
         if (outage) throw new Error("bitbop: upstream outage (indexers or debrid unavailable)");
+        // A download in progress: tell the player to wait and come back. Must NOT
+        // be cached — the whole point is that re-requesting sees new progress and
+        // eventually the finished stream.
+        if (resolving) return { streams, resolving, cacheMaxAge: 0 };
         // Genuine no-match caches briefly; real results are memory-only on the
         // player side (bearer URLs), so keep the addon-side cache short too.
         if (streams.length === 0) return { streams: [], cacheMaxAge: 300 };

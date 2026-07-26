@@ -55,6 +55,24 @@ export interface CacheResult {
   handle?: string;
 }
 
+/**
+ * The state of a torrent being **downloaded** on the account (see
+ * {@link DebridProvider.startDownload}). Unlike a cache check, an in-progress
+ * download is kept, not deleted — the user asked to play it.
+ */
+export interface DownloadStatus {
+  /** Provider-side torrent id — thread it back to poll without re-adding. */
+  handle: string;
+  /** True once fully downloaded; `files` is then populated for `pickFile`. */
+  done: boolean;
+  /** Download fraction 0..1, when the provider reports it. */
+  progress?: number;
+  /** The torrent's files, present when `done`. */
+  files?: DebridFile[];
+  /** True when the torrent is unusable (dead/no audio) and was cleaned up — don't retry it. */
+  dead?: boolean;
+}
+
 /** A resolved, directly-playable link to one file. */
 export interface ResolvedLink {
   /** Direct https URL on the provider's CDN. Range-servable, browser-playable. */
@@ -108,6 +126,19 @@ export interface DebridProvider {
    * Rejects on failure.
    */
   resolveFile(ref: TorrentRef, fileId: string, apiKey: string, signal?: AbortSignal): Promise<ResolvedLink>;
+
+  /**
+   * Ensure an **uncached** torrent is downloading on the account, and report its
+   * progress — for the player's "Downloading on debrid…" state. This deliberately
+   * **keeps** an in-progress download (`checkCache` would delete it), because the
+   * user pressed play; that reversal of the delete-unless-cached rule is the whole
+   * point of this method, and why it's separate. To avoid a duplicate add (RD's
+   * `addMagnet` does not dedupe), it must find an existing download for the hash
+   * (any status) before adding. A torrent that is dead / has no audio is cleaned
+   * up and reported `dead`. Optional — a provider without it leaves Bitbop
+   * cached-only. Rejects on transport/auth failure.
+   */
+  startDownload?(ref: TorrentRef, apiKey: string, signal?: AbortSignal): Promise<DownloadStatus>;
 }
 
 /** Raised when a provider call fails in a way worth distinguishing (auth vs. transient). */

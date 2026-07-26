@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { resolveStreams, rankCandidates, keepRelevantCandidates } from "../src/resolve.js";
 import type { ResolveDeps } from "../src/resolve.js";
 import { parseConfig, type BitbopConfig } from "../src/config.js";
@@ -45,6 +45,7 @@ const providerOf = (over: Partial<DebridProvider> & { cache?: CacheResult; link?
   id: "realdebrid",
   // Optional on the port: only present when a test opts into the bulk pre-check.
   ...(over.listCached ? { listCached: over.listCached } : {}),
+  ...(over.startDownload ? { startDownload: over.startDownload } : {}),
   checkCache: over.checkCache ?? (async () => over.cache ?? { cached: true, files: albumFiles }),
   resolveFile: over.resolveFile ?? (async () => over.link ?? { url: "https://rd.example/dl/digital-love.flac", filename: "03 - Digital Love.flac", sizeBytes: 50_000_000 }),
 });
@@ -402,5 +403,66 @@ describe("keepRelevantCandidates — multi-year collections are dropped", () => 
     const target: TrackContext = { artist: "Taylor Swift", album: "1989", year: 2014, title: "Style", disc: 1, position: "3", hasAlbumContext: true };
     const kept = keepRelevantCandidates([c("Taylor Swift - 1989 (2014) [FLAC]", 100)], target);
     expect(kept).toHaveLength(1); // kept, not penalized as a year-range
+  });
+});
+
+describe("resolveStreams — download uncached (resolving)", () => {
+  const withDownload = (startDownload: NonNullable<DebridProvider["startDownload"]>): DebridProvider =>
+    providerOf({ listCached: async () => new Map(), checkCache: async () => ({ cached: false }), startDownload });
+  const seeded = (seeders: number) => deps({ indexers: [indexerOf([{ ...candidate, seeders }])] });
+
+  it("starts a download and returns a resolving marker when nothing is cached", async () => {
+    const provider = withDownload(async () => ({ handle: "T1", done: false, progress: 0.3 }));
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...seeded(10), provider });
+    expect(result.streams).toEqual([]);
+    expect(result.resolving).toMatchObject({ progress: 0.3 });
+    expect(result.resolving?.message).toBeTruthy();
+  });
+
+  it("resolves a real stream when the download has just completed", async () => {
+    const provider = providerOf({
+      listCached: async () => new Map(),
+      // probe (no handle) = uncached; completion path re-checks by handle = cached.
+      checkCache: async (ref) => (ref.handle ? { cached: true, files: albumFiles, handle: ref.handle } : { cached: false }),
+      startDownload: async () => ({ handle: "T1", done: true, files: albumFiles }),
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...seeded(10), provider });
+    expect(result.streams).toHaveLength(1);
+    expect(result.resolving).toBeUndefined();
+  });
+
+  it("does not download when the feature is off", async () => {
+    const started = vi.fn(async () => ({ handle: "T1", done: false }));
+    const result = await resolveStreams({ recordingId: RID }, config({ downloadUncached: false }), {
+      ...seeded(10),
+      provider: withDownload(started),
+    });
+    expect(result.resolving).toBeUndefined();
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it("does not download a candidate below the seeders floor", async () => {
+    const started = vi.fn(async () => ({ handle: "T1", done: false }));
+    const result = await resolveStreams({ recordingId: RID }, config({ downloadSeedersFloor: 5 }), {
+      ...seeded(1),
+      provider: withDownload(started),
+    });
+    expect(result.resolving).toBeUndefined();
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it("treats a dead torrent as a no-match, not resolving", async () => {
+    const provider = withDownload(async () => ({ handle: "T1", done: false, dead: true }));
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...seeded(10), provider });
+    expect(result.resolving).toBeUndefined();
+    expect(result.streams).toEqual([]);
+  });
+
+  it("reports an outage when starting the download hits a bad key", async () => {
+    const provider = withDownload(async () => {
+      throw new DebridError("auth failed", true);
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...seeded(10), provider });
+    expect(result.outage).toBe(true);
   });
 });

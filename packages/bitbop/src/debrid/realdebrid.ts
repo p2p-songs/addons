@@ -44,6 +44,7 @@ import {
   type CacheResult,
   type DebridFile,
   type DebridProvider,
+  type DownloadStatus,
   type ResolvedLink,
   type TorrentRef,
 } from "./types.js";
@@ -95,6 +96,8 @@ interface RdFile {
 interface RdInfo {
   id?: string;
   status: string;
+  /** RD's download progress, 0–100. */
+  progress?: number;
   files: RdFile[];
   links: string[];
 }
@@ -215,6 +218,70 @@ export class RealDebridProvider implements DebridProvider {
     if (unrestricted.filename) resolved.filename = unrestricted.filename;
     if (typeof unrestricted.filesize === "number") resolved.sizeBytes = unrestricted.filesize;
     return resolved;
+  }
+
+  async startDownload(ref: TorrentRef, apiKey: string, signal?: AbortSignal): Promise<DownloadStatus> {
+    // Reuse an existing download for this hash before adding — RD's addMagnet does
+    // not dedupe, so without this a re-poll (the player re-resolving while it
+    // downloads) would add the same torrent again and again.
+    const handle = ref.handle ?? (await this.findAnyByHash(ref.infoHash, apiKey, signal));
+    if (handle) {
+      const info = await this.info(handle, apiKey, signal);
+      if (STATUS_TERMINAL_ERROR.has(info.status)) {
+        await this.deleteQuietly(handle, apiKey);
+        return { handle, done: false, dead: true };
+      }
+      return this.toDownloadStatus(handle, info);
+    }
+
+    // Not on the account yet: add it, select audio, and **keep** it downloading
+    // (unlike checkCache, which deletes an uncached torrent). Only a dead torrent
+    // or one with no audio is cleaned up.
+    const deadline = this.now() + this.settleBudgetMs;
+    const id = await this.addMagnet(ref.infoHash, apiKey, signal);
+    try {
+      const info = await this.selectAudioAndSettle(id, apiKey, deadline, signal);
+      if (info.status === "no_audio_files") {
+        await this.deleteQuietly(id, apiKey);
+        return { handle: id, done: false, dead: true };
+      }
+      return this.toDownloadStatus(id, info);
+    } catch (error) {
+      // A dead/unusable torrent (selectAudioAndSettle throws) is cleaned up; a
+      // transport/auth failure propagates and leaves nothing half-added to leak.
+      await this.deleteQuietly(id, apiKey);
+      if (error instanceof DebridError && !error.isAuth) return { handle: id, done: false, dead: true };
+      throw error;
+    }
+  }
+
+  private toDownloadStatus(handle: string, info: RdInfo): DownloadStatus {
+    const done = info.status === STATUS_DOWNLOADED;
+    const progress = typeof info.progress === "number" ? Math.max(0, Math.min(1, info.progress / 100)) : undefined;
+    return {
+      handle,
+      done,
+      ...(progress !== undefined ? { progress } : {}),
+      ...(done ? { files: selectedFiles(info) } : {}),
+    };
+  }
+
+  /** First torrent id on the account whose hash matches, in **any** status (so an in-progress download is reused). */
+  private async findAnyByHash(infoHash: string, apiKey: string, signal?: AbortSignal): Promise<string | undefined> {
+    const wanted = infoHash.toLowerCase();
+    for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+      const items = await this.get<RdListItem[] | undefined>(
+        `/torrents?page=${page}&limit=${LIST_PAGE_SIZE}`,
+        apiKey,
+        signal,
+      );
+      if (!Array.isArray(items) || items.length === 0) break;
+      for (const item of items) {
+        if (item.hash?.toLowerCase() === wanted && item.id) return item.id;
+      }
+      if (items.length < LIST_PAGE_SIZE) break;
+    }
+    return undefined;
   }
 
   // --- the state machine ---

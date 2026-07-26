@@ -110,9 +110,18 @@ selectable without an adapter, which let you build a valid-looking install URL
 that could never produce a stream (audit A-011). Adding a provider is a
 `DebridProvider` implementation, a registry entry, and the id in the schema.
 
-**Bitbop only returns already-cached torrents.** That isn't a setting — resolving
-an uncached torrent means waiting on a debrid-side download, which a player can't
-do mid-queue.
+**Uncached torrents: download and report progress (`downloadUncached`, default
+on).** When nothing is cached, Bitbop starts a download of the best promising
+candidate on the user's account and returns a **`resolving`** marker (with
+progress) instead of a no-match; the player shows "Downloading on debrid…" and
+re-resolves until it's ready. This reverses an earlier cached-only contract —
+which held because a player couldn't wait on a download mid-queue — now that the
+stream response can say `resolving` and the player waits on it. Guardrails: a
+seeders floor (`downloadSeedersFloor`, default 1) so a near-dead torrent isn't
+parked half-done; naturally one download per album (every track resolves to the
+same top candidate, found by hash rather than re-added); and the player caps the
+total wait, then fails. Set `downloadUncached: false` to keep the account
+strictly cached-only.
 
 ## Why checking the cache is not a read
 
