@@ -113,15 +113,16 @@ that could never produce a stream (audit A-011). Adding a provider is a
 **Uncached torrents: download and report progress (`downloadUncached`, default
 on).** When nothing is cached, Bitbop starts a download of the best promising
 candidate on the user's account and returns a **`resolving`** marker (with
-progress) instead of a no-match; the player shows "Downloading on debrid…" and
-re-resolves until it's ready. This reverses an earlier cached-only contract —
-which held because a player couldn't wait on a download mid-queue — now that the
-stream response can say `resolving` and the player waits on it. Guardrails: a
-seeders floor (`downloadSeedersFloor`, default 1) so a near-dead torrent isn't
-parked half-done; naturally one download per album (every track resolves to the
-same top candidate, found by hash rather than re-added); and the player caps the
-total wait, then fails. Set `downloadUncached: false` to keep the account
-strictly cached-only.
+progress) instead of a no-match; the player shows "Downloading…" and re-resolves
+until it's ready. This reverses an earlier cached-only contract — which held
+because a player couldn't wait on a download mid-queue — now that the stream
+response can say `resolving` and the player waits on it. It downloads **only the
+requested track's file**, not the whole album, so a single song isn't gated on
+every other track. Guardrails: a seeders floor (`downloadSeedersFloor`, default
+1) so a near-dead torrent isn't parked half-done; an in-progress download is
+found by hash rather than re-added, so each poll costs no churn; and the player
+caps the total wait, then fails. Set `downloadUncached: false` to keep the
+account strictly cached-only.
 
 ## Why checking the cache is not a read
 
