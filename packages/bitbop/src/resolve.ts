@@ -198,7 +198,7 @@ async function maybeStartDownload(
       streams: [],
       outage: false,
       resolving: {
-        message: "Downloading on debrid",
+        message: "Downloading",
         retryAfter: DOWNLOAD_RETRY_SECONDS,
         ...(status.progress !== undefined ? { progress: status.progress } : {}),
       },
