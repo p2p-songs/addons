@@ -102,8 +102,14 @@ export function renderBitbopConfigurePage(ctx: {
 <button id="addIndexer" type="button">+ Add indexer</button>
 
 <h2>Options</h2>
-<p class="hint">Bitbop only returns torrents your debrid account has <strong>already cached</strong>, so a track starts instantly. Anything uncached would mean waiting on a download, which a player can't do mid-queue.</p>
 <div class="row">
+  <div>
+    <label for="downloadUncached">
+      <input id="downloadUncached" type="checkbox" ${prior.downloadUncached ? "checked" : ""} />
+      Download uncached tracks
+    </label>
+    <p class="hint">A cached track starts instantly. When you press a track that <strong>nobody has cached yet</strong>, Bitbop adds its album to <strong>your own</strong> Real-Debrid account and downloads it — the player shows “Downloading…” with progress, then plays. It fetches the <strong>whole album</strong> (not one file): Real-Debrid only serves a torrent's files once the selected set finishes, so grabbing the album makes the <em>rest</em> of it instant. Uncheck to keep your account strictly cached-only — an uncached track then simply finds no source.</p>
+  </div>
   <div>
     <label for="maxResults">Max streams</label>
     <input id="maxResults" type="number" min="1" max="20" value="${prior.maxResults}" />
@@ -206,6 +212,7 @@ export function renderBitbopConfigurePage(ctx: {
     var cfg = {
       debrid: { provider: document.getElementById("provider").value, apiKey: apiKey },
       indexers: indexers,
+      downloadUncached: document.getElementById("downloadUncached").checked,
       maxResults: Number(document.getElementById("maxResults").value) || 8
     };
 
@@ -230,6 +237,7 @@ export function renderBitbopConfigurePage(ctx: {
 /** Prefill shape only — never key material. */
 function readPrior(config: AddonConfig | undefined): {
   maxResults: number;
+  downloadUncached: boolean;
   indexerNames: string[];
 } {
   const rawIndexers = config?.["indexers"];
@@ -249,6 +257,8 @@ function readPrior(config: AddonConfig | undefined): {
     : [];
 
   const maxResults = typeof config?.["maxResults"] === "number" ? (config["maxResults"] as number) : 8;
+  // Matches bitbopConfigSchema's default: on unless the stored config says false.
+  const downloadUncached = typeof config?.["downloadUncached"] === "boolean" ? (config["downloadUncached"] as boolean) : true;
 
-  return { maxResults, indexerNames };
+  return { maxResults, downloadUncached, indexerNames };
 }
