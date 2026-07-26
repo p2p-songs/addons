@@ -371,3 +371,36 @@ describe("keepRelevantCandidates — gate out different albums", () => {
     expect(keepRelevantCandidates(cands, bare)).toHaveLength(2);
   });
 });
+
+describe("keepRelevantCandidates — multi-year collections are dropped", () => {
+  const c = (title: string, seeders: number): TorrentCandidate => ({ indexer: "fake", title, infoHash: HASH, seeders });
+  const selfTitled: TrackContext = {
+    artist: "Taylor Swift",
+    album: "Taylor Swift",
+    year: 2006,
+    title: "The Outside",
+    disc: 1,
+    position: "6",
+    hasAlbumContext: true,
+  };
+
+  it("drops a hits comp whose year-range spans the album year, over the real album", () => {
+    // "40 Biggest Hot 100 Hits 2006-2021" matched artist + a year from its range,
+    // scoring like the debut and ranking above it on seeders — its track 6 is a
+    // different song. The year *range* marks it as a multi-album pack.
+    const kept = keepRelevantCandidates(
+      [
+        c("Taylor Swift - 40 Biggest Hot 100 Hits 2006-2021 [FLAC]", 40),
+        c("Taylor Swift - Taylor Swift (2006) [FLAC]", 1),
+      ],
+      selfTitled,
+    );
+    expect(kept.map((k) => k.title)).toEqual(["Taylor Swift - Taylor Swift (2006) [FLAC]"]);
+  });
+
+  it("does not treat a normal album+year title ('1989 (2014)') as a collection", () => {
+    const target: TrackContext = { artist: "Taylor Swift", album: "1989", year: 2014, title: "Style", disc: 1, position: "3", hasAlbumContext: true };
+    const kept = keepRelevantCandidates([c("Taylor Swift - 1989 (2014) [FLAC]", 100)], target);
+    expect(kept).toHaveLength(1); // kept, not penalized as a year-range
+  });
+});

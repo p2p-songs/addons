@@ -120,14 +120,21 @@ export async function resolveStreams(
     try {
       const stream = await resolveCandidate(candidate, track, config, deps.provider, handle, signal);
       if (stream) streams.push(stream);
+      if (process.env.BITBOP_DEBUG) {
+        console.error(`[bitbop]   probe ${handle ? "on-account" : "add"} → ${stream ? "STREAM" : "no file/uncached"}: ${candidate.title}`);
+      }
     } catch (error) {
       if (error instanceof DebridError && error.isAuth) {
         authFailed = true;
         break; // a bad key fails every candidate — stop, and report it as an outage
       }
       providerFailures++;
+      if (process.env.BITBOP_DEBUG) console.error(`[bitbop]   probe FAILED (${(error as Error).message}): ${candidate.title}`);
       // A single torrent failing (removed, transient) must not sink the response.
     }
+  }
+  if (process.env.BITBOP_DEBUG) {
+    console.error(`[bitbop]   → ${streams.length} stream(s) from ${probed} probe(s), ${providerFailures} failure(s)`);
   }
 
   if (streams.length === 0) {
@@ -302,9 +309,8 @@ function albumRelevance(title: string, track: TrackContext): number {
   // A multi-album pack matches the album tokens *and* the year (it spans them),
   // but its track at the requested disc+position belongs to a different album, so
   // deterministic selection returns the wrong song. Penalize it below any genuine
-  // single-album match. Keyword-based on purpose — a year-range heuristic would
-  // misfire on a normal title that carries album-number + release-year ("1989 2014").
-  const collectionPenalty = looksLikeCollection(t) ? 1.5 : 0;
+  // single-album match.
+  const collectionPenalty = looksLikeCollection(title, t) ? 1.5 : 0;
   return albumFraction + yearBonus - collectionPenalty;
 }
 
@@ -341,11 +347,22 @@ function debugCandidates(track: TrackContext, ranked: TorrentCandidate[], releva
   }
 }
 
-/** True for a title that packs many albums together (its position-1 file isn't this album's). */
-function looksLikeCollection(paddedTitle: string): boolean {
-  return /\b(discography|discografia|complete|collection|anthology|box ?sets?|greatest hits|all albums)\b/.test(
-    paddedTitle,
-  );
+/**
+ * True for a title that packs many albums together — its file at the requested
+ * disc+position belongs to a different album than the one asked for.
+ *
+ * Two independent signals:
+ *  - a **year range** ("2006-2021", "2006–2014"), which only a multi-year
+ *    collection carries. Checked on the *raw* title so the dash is intact — a
+ *    normal "1989 (2014)" has no dash between its numbers and never matches (the
+ *    reason this couldn't be done on the normalized text). This is what catches
+ *    a hits comp like "40 Biggest Hot 100 Hits 2006-2021" that otherwise scores
+ *    like the real album (artist name + a year from the range).
+ *  - explicit **multi-album words**.
+ */
+function looksLikeCollection(rawTitle: string, paddedTitle: string): boolean {
+  if (/\b(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}\b/.test(rawTitle)) return true;
+  return /\b(discography|discografia|complete|anthology|collection|box ?sets?|all albums)\b/.test(paddedTitle);
 }
 
 /** Rank the final, resolved streams the same way (format preference, then seeders proxy in description). */
