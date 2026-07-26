@@ -28,7 +28,7 @@ import type { Resolving, Stream, StreamRequest } from "@p2p-songs/addon-sdk";
 import type { BitbopConfig } from "./config.js";
 import type { MetadataLookup, TrackContext } from "./metadata.js";
 import type { Indexer, TorrentCandidate } from "./indexers/types.js";
-import type { DebridFile, DebridProvider, TorrentRef } from "./debrid/types.js";
+import type { DebridProvider, TorrentRef } from "./debrid/types.js";
 import { DebridError } from "./debrid/types.js";
 import { pickFile, type FileMatch } from "./pick-file.js";
 import { detectFormat } from "./format.js";
@@ -123,7 +123,12 @@ export async function resolveStreams(
     if (streams.length >= config.maxResults) break;
     const handle = onAccount.get(candidate.infoHash.toLowerCase());
     if (handle === undefined) {
-      if (uncachedProbes >= MAX_UNCACHED_PROBES) continue;
+      // An uncached candidate costs an `addMagnet` (rate-limited — RD returns 429
+      // under a burst, which prefetching several tracks at once easily triggers).
+      // Only spend one when we have *nothing* yet: a cached/on-account stream
+      // already in hand is enough, and if none is cached the download path takes
+      // over from the single best candidate.
+      if (streams.length > 0 || uncachedProbes >= MAX_UNCACHED_PROBES) continue;
       uncachedProbes++;
     }
     probed++;
@@ -181,15 +186,15 @@ async function maybeStartDownload(
   const candidate = relevant.find((c) => (c.seeders ?? 0) >= config.downloadSeedersFloor);
   if (!candidate) return undefined;
 
-  // Download just the requested track's file, not the whole album — a single-song
-  // play shouldn't wait on every other track. Falls back to all audio if the file
-  // can't be identified (no album context / ambiguous), same as `pickFile` elsewhere.
-  const pickFiles = (files: DebridFile[]): string[] => {
-    const match = pickFile(files, track, config.preferFormats);
-    return match ? [match.file.id] : [];
-  };
+  // Download the whole album (all audio), not just this track's file. On
+  // Real-Debrid a torrent is only "downloaded" — and its files only servable —
+  // once its *entire selected set* completes, so selecting a single file would
+  // make every *other* track of that album unplayable (the torrent reports done
+  // with just the one file present). Whole-album selection keeps album playback
+  // coherent and makes the rest of the album instant once it lands. `startDownload`
+  // still accepts a file picker for providers that can serve partial torrents.
   try {
-    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal, pickFiles);
+    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal);
     if (process.env.BITBOP_DEBUG) {
       console.error(
         `[bitbop]   download ${status.done ? "DONE" : status.dead ? "dead" : `${Math.round((status.progress ?? 0) * 100)}%`}: ${candidate.title}`,

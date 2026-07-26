@@ -229,6 +229,25 @@ describe("resolveStreams — failure semantics", () => {
     expect(probed).toHaveLength(3);
   });
 
+  it("stops spending adds on uncached candidates once a cached stream is found", async () => {
+    // The account already holds one match; the others are uncached. Add-checking
+    // them anyway (to fill out the stream list) burned RD's rate limit → 429s.
+    const cached = { ...candidate, infoHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+    const uncached = { ...candidate, infoHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", seeders: 9999 };
+    const added: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map([[cached.infoHash, "T-CACHED"]]),
+      checkCache: async (ref) => {
+        if (ref.handle) return { cached: true, files: albumFiles, handle: ref.handle };
+        added.push(ref.infoHash); // reached only if we spend an add on an uncached candidate
+        return { cached: false };
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), deps({ indexers: [indexerOf([uncached, cached])], provider }));
+    expect(result.streams).toHaveLength(1);
+    expect(added).toEqual([]); // never added the uncached candidate once the cached one gave a stream
+  });
+
   it("does not report an outage merely because the add budget ran out", async () => {
     const many = Array.from({ length: 10 }, (_, i) => ({ ...candidate, infoHash: String(i).repeat(40) }));
     const provider = providerOf({ cache: { cached: false } });

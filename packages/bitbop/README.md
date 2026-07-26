@@ -116,13 +116,16 @@ candidate on the user's account and returns a **`resolving`** marker (with
 progress) instead of a no-match; the player shows "Downloading…" and re-resolves
 until it's ready. This reverses an earlier cached-only contract — which held
 because a player couldn't wait on a download mid-queue — now that the stream
-response can say `resolving` and the player waits on it. It downloads **only the
-requested track's file**, not the whole album, so a single song isn't gated on
-every other track. Guardrails: a seeders floor (`downloadSeedersFloor`, default
-1) so a near-dead torrent isn't parked half-done; an in-progress download is
-found by hash rather than re-added, so each poll costs no churn; and the player
-caps the total wait, then fails. Set `downloadUncached: false` to keep the
-account strictly cached-only.
+response can say `resolving` and the player waits on it. It downloads the **whole
+album** (all audio), not a single file: on Real-Debrid a torrent's files are only
+servable once its entire selected set completes, so selecting one file would make
+every *other* track of that album unplayable — and fetching the album makes the
+rest instant once it lands. Guardrails: a seeders floor (`downloadSeedersFloor`,
+default 1) so a near-dead torrent isn't parked half-done; an in-progress download
+is found by hash rather than re-added, so a poll costs no churn; once a cached
+stream is in hand Bitbop stops spending `addMagnet` on the other candidates (that
+burst was tripping RD's 429 rate limit); and the player caps the total wait, then
+fails. Set `downloadUncached: false` to keep the account strictly cached-only.
 
 ## Why checking the cache is not a read
 
