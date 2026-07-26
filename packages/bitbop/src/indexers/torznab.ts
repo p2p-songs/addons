@@ -68,7 +68,24 @@ export class TorznabIndexer implements Indexer {
 /** Build the search string. Album context narrows to the release; otherwise search the track. */
 export function buildQueryString(query: ReleaseQuery): string {
   const subject = query.album ?? query.track ?? "";
-  return [query.artist, subject].filter(Boolean).join(" ").trim();
+  const parts = [query.artist, subject];
+  // A **self-titled** album makes the query "Artist Artist", which matches every
+  // release by the artist — the indexer then returns the most-seeded albums and
+  // the (usually low-seeded) self-titled one is crowded out entirely (measured
+  // live: the Taylor Swift debut never appeared, so its tracks played evermore).
+  // Appending the year narrows the search to the actual album; only self-titled,
+  // to avoid over-filtering releases whose torrents omit the year.
+  if (query.year && query.album && isSelfTitled(query.artist, query.album)) {
+    parts.push(String(query.year));
+  }
+  return parts.filter(Boolean).join(" ").trim();
+}
+
+const normalizeName = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/** True when the album title is the artist's own name (a self-titled release). */
+function isSelfTitled(artist: string, album: string): boolean {
+  return normalizeName(artist) === normalizeName(album);
 }
 
 /**

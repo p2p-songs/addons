@@ -11,6 +11,13 @@ export interface ReleaseQuery {
   artist: string;
   /** The release/album title to look for, when album context resolved one. */
   album?: string;
+  /**
+   * The album's release year, when known. Only added to the query for a
+   * **self-titled** album, where "Artist Artist" is a degenerate search that
+   * matches every release by the artist — the year narrows it to the actual
+   * album (whose torrents are named "… (2006) …").
+   */
+  year?: number;
   /** The track/recording title, used when there is no album context. */
   track?: string;
 }

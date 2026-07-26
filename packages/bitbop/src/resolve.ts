@@ -75,16 +75,27 @@ export async function resolveStreams(
   if (candidates.length === 0) return { streams: [], outage: false };
 
   const ranked = rankCandidates(candidates, track, config);
+  // Drop candidates that clearly belong to a *different album* than the one asked
+  // for. This is load-bearing, not just an optimization: the cached-first probe
+  // order below and the format-only final `rankStreams` both ignore album
+  // relevance, so a wrong-album torrent that is merely cached (or a better format)
+  // would still be picked and its position-1 file returned — the self-titled bug,
+  // where "Taylor Swift"'s debut played evermore's "willow". Gating removes those
+  // torrents entirely, so cached-preference and format ranking only ever choose
+  // among the *right* album.
+  const relevant = keepRelevantCandidates(ranked, track);
+
+  if (process.env.BITBOP_DEBUG) debugCandidates(track, ranked, relevant);
 
   // One read that answers "which of these does the user already have?". For the
   // second and later tracks of an album this is the whole story — track 1 left
   // the torrent on the account — so the common case adds nothing at all.
-  const pre = await listCachedQuietly(deps.provider, ranked, config, signal);
+  const pre = await listCachedQuietly(deps.provider, relevant, config, signal);
   if (pre.authFailed) return { streams: [], outage: true };
   const onAccount = pre.known;
   // Probe the free ones first: they can satisfy the request before we spend a
   // single write, and a hit here means the expensive budget goes unused.
-  const probe = [...ranked]
+  const probe = [...relevant]
     .sort((a, b) => Number(onAccount.has(b.infoHash.toLowerCase())) - Number(onAccount.has(a.infoHash.toLowerCase())))
     .slice(0, MAX_TORRENTS_PROBED);
 
@@ -134,7 +145,12 @@ async function discover(
   indexers: Indexer[],
   signal?: AbortSignal,
 ): Promise<{ candidates: TorrentCandidate[]; allIndexersFailed: boolean }> {
-  const query = { artist: track.artist, ...(track.album ? { album: track.album } : {}), ...(track.title ? { track: track.title } : {}) };
+  const query = {
+    artist: track.artist,
+    ...(track.album ? { album: track.album } : {}),
+    ...(track.year !== undefined ? { year: track.year } : {}),
+    ...(track.title ? { track: track.title } : {}),
+  };
   const settled = await Promise.allSettled(indexers.map((i) => i.search(query, signal)));
 
   const candidates: TorrentCandidate[] = [];
@@ -290,6 +306,39 @@ function albumRelevance(title: string, track: TrackContext): number {
   // misfire on a normal title that carries album-number + release-year ("1989 2014").
   const collectionPenalty = looksLikeCollection(t) ? 1.5 : 0;
   return albumFraction + yearBonus - collectionPenalty;
+}
+
+/**
+ * Keep only candidates that plausibly are the requested album, dropping those a
+ * decisive signal marks as a different one. "Decisive" means the best candidate
+ * scored above the ubiquitous artist/album-name match (i.e. its title carried the
+ * album **year**): then anything a full point below it is missing that year and is
+ * a different release, so drop it. Without such a signal (no year matched
+ * anywhere — every candidate ties on the artist name, as happens for a
+ * self-titled album whose torrents omit the year) there is nothing to safely gate
+ * on, so keep them all and let probe/rank order decide. The best candidate is
+ * always kept, so this never empties a non-empty list.
+ */
+export function keepRelevantCandidates(ranked: TorrentCandidate[], track: TrackContext): TorrentCandidate[] {
+  if (!track.album || ranked.length === 0) return ranked;
+  const scored = ranked.map((c) => ({ c, r: albumRelevance(c.title, track) }));
+  const best = Math.max(...scored.map((s) => s.r));
+  return scored.filter((s) => s.r > best - 1).map((s) => s.c);
+}
+
+/** BITBOP_DEBUG diagnostic: the resolved album context and how candidates scored/gated. */
+function debugCandidates(track: TrackContext, ranked: TorrentCandidate[], relevant: TorrentCandidate[]): void {
+  const kept = new Set(relevant);
+  console.error(
+    `[bitbop] resolve album=${JSON.stringify(track.album)} year=${track.year ?? "?"} ` +
+      `title=${JSON.stringify(track.title)} disc=${track.disc ?? "?"} pos=${track.position ?? "?"}`,
+  );
+  for (const c of ranked.slice(0, 10)) {
+    console.error(
+      `[bitbop]   r=${albumRelevance(c.title, track).toFixed(2)} seed=${c.seeders ?? 0} ` +
+        `${kept.has(c) ? "KEEP" : "drop"} ${c.title}`,
+    );
+  }
 }
 
 /** True for a title that packs many albums together (its position-1 file isn't this album's). */

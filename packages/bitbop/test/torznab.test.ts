@@ -67,6 +67,22 @@ describe("buildQueryString", () => {
       "Daft Punk Discovery",
     );
   });
+
+  it("appends the year for a self-titled album so the query isn't degenerate", () => {
+    // "Taylor Swift Taylor Swift" matched every release by her; the year narrows
+    // the indexer to the actual 2006 debut (which was otherwise crowded out).
+    expect(buildQueryString({ artist: "Taylor Swift", album: "Taylor Swift", year: 2006 })).toBe(
+      "Taylor Swift Taylor Swift 2006",
+    );
+    // Case/punctuation differences still count as self-titled.
+    expect(buildQueryString({ artist: "Weezer", album: "Weezer", year: 1994 })).toBe("Weezer Weezer 1994");
+  });
+
+  it("does not add the year to a normal (non-self-titled) album query", () => {
+    expect(buildQueryString({ artist: "Taylor Swift", album: "1989", year: 2014 })).toBe("Taylor Swift 1989");
+    // No year available → unchanged even when self-titled.
+    expect(buildQueryString({ artist: "Taylor Swift", album: "Taylor Swift" })).toBe("Taylor Swift Taylor Swift");
+  });
 });
 
 describe("TorznabIndexer", () => {

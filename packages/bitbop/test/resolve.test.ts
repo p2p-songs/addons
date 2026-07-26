@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveStreams, rankCandidates } from "../src/resolve.js";
+import { resolveStreams, rankCandidates, keepRelevantCandidates } from "../src/resolve.js";
 import type { ResolveDeps } from "../src/resolve.js";
 import { parseConfig, type BitbopConfig } from "../src/config.js";
 import type { MetadataLookup, TrackContext } from "../src/metadata.js";
@@ -328,5 +328,46 @@ describe("rankCandidates — album relevance dominates seeders/format", () => {
     const bare: TrackContext = { artist: "Daft Punk", title: "Digital Love", hasAlbumContext: false };
     const ranked = rankCandidates([c("some torrent", 10), c("another torrent", 9000)], bare, cfg);
     expect(ranked[0]!.seeders).toBe(9000);
+  });
+});
+
+describe("keepRelevantCandidates — gate out different albums", () => {
+  const c = (title: string, seeders: number): TorrentCandidate => ({ indexer: "fake", title, infoHash: HASH, seeders });
+  const selfTitled: TrackContext = {
+    artist: "Taylor Swift",
+    album: "Taylor Swift",
+    year: 2006,
+    title: "Tim McGraw",
+    disc: 1,
+    position: "1",
+    hasAlbumContext: true,
+  };
+
+  it("drops a wrong-album torrent even when it's far better seeded (the willow bug)", () => {
+    const kept = keepRelevantCandidates(
+      [c("Taylor Swift - evermore (2020) [FLAC]", 9000), c("Taylor Swift - Taylor Swift (2006) [FLAC]", 10)],
+      selfTitled,
+    );
+    expect(kept.map((k) => k.title)).toEqual(["Taylor Swift - Taylor Swift (2006) [FLAC]"]);
+  });
+
+  it("keeps all when no year separates them (nothing safe to gate on)", () => {
+    // No candidate title carries a year → every one only matches the artist name.
+    const cands = [c("Taylor Swift - Taylor Swift [FLAC]", 10), c("Taylor Swift - evermore [FLAC]", 9000)];
+    expect(keepRelevantCandidates(cands, selfTitled)).toHaveLength(2);
+  });
+
+  it("keeps same-album variants (deluxe/format) of the requested album", () => {
+    const kept = keepRelevantCandidates(
+      [c("Taylor Swift - Taylor Swift (2006) [FLAC]", 10), c("Taylor Swift - Taylor Swift (2006) Deluxe [MP3]", 5)],
+      selfTitled,
+    );
+    expect(kept).toHaveLength(2);
+  });
+
+  it("is a no-op for a bare recording (no album context)", () => {
+    const bare: TrackContext = { artist: "x", title: "y", hasAlbumContext: false };
+    const cands = [c("whatever", 1), c("another", 2)];
+    expect(keepRelevantCandidates(cands, bare)).toHaveLength(2);
   });
 });

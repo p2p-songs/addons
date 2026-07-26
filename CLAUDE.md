@@ -120,22 +120,36 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   keeps the release credit for **grouping only** (a `bingeGroup` must be stable
   across an album, so it can't key on a per-track artist). Found live against
   Prowlarr, where the query went out as `"Various Artists The Baroque, Volume 1"`.
-  **Candidate ranking is album-relevance-first, not seeders-first
-  (`candidateScore`, `resolve.ts`; 2026-07-25).** A Torznab `q=` search is fuzzy,
-  so it returns other albums/deluxe editions/**discography packs** alongside the
-  one asked for; ranking by format+seeders alone then picks the most-seeded, and
-  `pickFile` faithfully returns *that* album's track at the requested position —
-  the wrong song. **Self-titled albums were the live failure**: the query is
-  `"Taylor Swift Taylor Swift"`, which matches every release by her, so the debut
-  played a different song. Fix: `albumRelevance(title, track)` scores the fraction
-  of album tokens present **+ a decisive bonus when the album `year` appears**
-  (the only thing that separates a self-titled debut `(2006)` from `1989`), and
-  **penalizes collection/discography packs** (keyword-based — a year-range
-  heuristic misfires on a normal `1989 (2014)` title); this term is weighted
-  `×1000` so it dominates, with format/seeders only breaking ties *within* the
-  right album. `year` rides on `TrackContext` from `getRelease`'s
-  `groupFirstReleaseDate`. No album context (a bare recording) ⇒ relevance 0 ⇒
-  unchanged seeders/format ranking.
+  **Self-titled albums played the wrong song — a three-layer fix (2026-07-25,
+  confirmed with `BITBOP_DEBUG` against a live Prowlarr).** `mbid:release:` album
+  context for the Taylor Swift **self-titled** debut played evermore's "willow".
+  Root cause, in order of importance:
+  1. **The query was degenerate (`buildQueryString`, `torznab.ts`).** A self-titled
+     album makes the query `"Taylor Swift Taylor Swift"`, which matches *every*
+     release by her; the indexer returns the top-seeded albums and the low-seeded
+     2006 debut **never appears in the results at all** — so no amount of ranking
+     could pick it. Fix: when the album title equals the artist name, **append the
+     album `year`** (`"Taylor Swift Taylor Swift 2006"`) to narrow the indexer to
+     the actual release. Self-titled only, so normal albums (whose torrents may
+     omit the year) aren't over-filtered.
+  2. **Ranking ignored album relevance (`candidateScore`).** A fuzzy `q=` still
+     returns deluxe editions / **discography packs** / other albums; format+seeders
+     alone picked the most-seeded and `pickFile` returned *its* track at the
+     position. Fix: `albumRelevance(title, track)` = fraction of album tokens
+     present **+ a bonus when the `year` appears** − a **collection/discography
+     penalty** (keyword-based; a year-range heuristic misfires on a normal
+     `1989 (2014)`), weighted `×1000` so it dominates format/seeders.
+  3. **Cached-first probe order & format-only final `rankStreams` override
+     relevance.** A wrong-album torrent already on the account (or a better format)
+     could still win. Fix: `keepRelevantCandidates` **gates out** candidates a
+     full point below the best (a different album by the year signal) *before*
+     the cached-first sort, so those two steps only ever choose within the right
+     album. Gate is a no-op when nothing decisive separates candidates (keeps all)
+     and always keeps the best.
+  `year` rides on `TrackContext` from `getRelease`'s `groupFirstReleaseDate`. A
+  bare recording (no album context) scores 0 / isn't gated → unchanged
+  seeders/format ranking. `BITBOP_DEBUG=1` logs the resolved album/year and each
+  candidate's score + keep/drop — how this was diagnosed.
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with
