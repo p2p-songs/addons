@@ -184,6 +184,18 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   could stall the very download) — cheap on-account reads still run, only the adds
   are gated. `listActive`/`listCached` are optimizations, never gates: a provider
   may omit them and a blip just costs the optimization.
+  **Hosting (2026-07-28).** `serve.ts` reads `HOST` (defaults `127.0.0.1`;
+  container hosts set `0.0.0.0` — it previously bound only loopback, unroutable on
+  Railway). Deploy assets: `deploy/bitbop.Dockerfile` (parent-context build, same
+  SDK `link:` prerequisite as musicmeta → ship a prebuilt image),
+  `deploy/railway/bitbop.railway.json`, and the shared-setup runbook
+  `deploy/railway/shared-setup.md` (Prowlarr + Bitbop + PHONO in the Shape-A model).
+  Deployed **public-safe** (never `BITBOP_ALLOW_PRIVATE_INDEXERS` on a public
+  instance) → Prowlarr must be a public, API-key-gated domain. Provisioning
+  scripts: `deploy/prowlarr/provision-indexers.mjs` (re-adds the six public
+  indexers to a fresh Prowlarr) and `deploy/bitbop/gen-install-url.mjs` (builds the
+  shared install URL, pulling the indexer list from Prowlarr; RD key via env, never
+  hardcoded). Both Docker images build + run verified locally.
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with

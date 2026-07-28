@@ -64,6 +64,12 @@ There are no credential environment variables — that's by design. A deployer
 runs the service (publicly, like Torrentio, is fine); each user brings their own
 account.
 
+It binds **loopback by default** (safe on a laptop). A container host that can
+only route to `0.0.0.0` sets `HOST=0.0.0.0` — the same knob musicmeta uses. To
+host it on Railway (public, public-safe mode, pointed at a public Prowlarr) see
+[`../../deploy/railway/shared-setup.md`](../../deploy/railway/shared-setup.md) and
+[`../../deploy/bitbop.Dockerfile`](../../deploy/bitbop.Dockerfile).
+
 ## Indexer address policy
 
 Bitbop fetches an indexer URL that *the caller* supplies. On a publicly reachable

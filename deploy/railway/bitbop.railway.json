@@ -1,0 +1,11 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "//": "Deploy config for the bitbop (stream-debrid) Railway service. Like musicmeta, Railway's native Dockerfile builder cannot see the sibling addon-sdk, so deploy the prebuilt image (build from the p2p-songs parent with deploy/bitbop.Dockerfile). Give this service a PUBLIC domain and set HOST=0.0.0.0; do NOT set BITBOP_ALLOW_PRIVATE_INDEXERS on a public instance (A-011).",
+  "deploy": {
+    "healthcheckPath": "/manifest.json",
+    "healthcheckTimeout": 30,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "numReplicas": 1
+  }
+}

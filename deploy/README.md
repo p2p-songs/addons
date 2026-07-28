@@ -1,5 +1,12 @@
 # Deploying the metadata plane (musicmeta + Meilisearch)
 
+> **Hosting the stream plane too?** Prowlarr + Bitbop + the PHONO player on
+> Railway (the "share one install URL with a friend" setup) have their own
+> runbook and prebuilt-image Dockerfiles: [`railway/shared-setup.md`](./railway/shared-setup.md),
+> [`bitbop.Dockerfile`](./bitbop.Dockerfile), `../../player/deploy/Dockerfile`,
+> plus the [`prowlarr/`](./prowlarr/) and [`bitbop/`](./bitbop/) provisioning
+> scripts. The rest of this file is the **metadata plane** only.
+
 Everything needed to host `musicmeta` — the default-installed metadata addon —
 with its optional Meilisearch search cache behind a Cloudflare edge. This is the
 **metadata plane**; it is hosted once, centrally, and shared by every player by

@@ -41,6 +41,10 @@ const addon = createBitbopAddon({
 });
 
 const port = Number(process.env.PORT ?? 7003);
+// The SDK binds loopback by default (safe for a laptop). A container host
+// (Railway, Docker) can only route to `0.0.0.0`, so it sets HOST — same knob as
+// musicmeta. Loopback stays the default so nothing is exposed unintentionally.
+const hostname = process.env.HOST ?? "127.0.0.1";
 
 console.log(
   allowPrivateIndexers
@@ -50,6 +54,7 @@ console.log(
 
 serveHTTP(addon, {
   port,
+  hostname,
   // The page states this instance's indexer policy and pre-checks against it,
   // so a refused destination is caught at configure time (A-011).
   configureHTML: (ctx) => renderBitbopConfigurePage({ ...ctx, allowPrivateIndexers }),
