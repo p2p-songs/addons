@@ -164,6 +164,26 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   *candidate/torrent* choice; `pickFile`'s FLAC-over-MP3 preference for the
   *file* inside an already-chosen torrent is unchanged (quality once the bytes
   are already local).
+  **Uncached download tolerates a dead top-seed (2026-07-28).** The indexer's
+  seeder count is only a hint — the best-ranked torrent can be dead on the debrid
+  side (0% forever, then an error status). The old `maybeStartDownload` committed
+  to the single best candidate and, on a `dead` verdict, returned a no-match — so a
+  dead top-seed produced *both* observed bugs at once: a re-poll re-added the
+  deleted torrent (stuck "Downloading… 0%") while the `dead` poll surfaced as
+  "addon couldn't find a source", with no fallback to the album's ten other
+  sources. Now it's **two phases**: (1) **resume** — a read-only `listActive` scan
+  (new optional `DebridProvider` method; RD reads `GET /torrents` for
+  `STATUS_IN_PROGRESS` hashes with live `progress`) reports an already-running
+  download's progress with **no writes**, and deliberately does *not* touch a
+  higher-ranked candidate a prior poll found dead; (2) **start-with-fallback** —
+  when nothing runs yet, start the best and, on `dead`, fall through to the next up
+  to `MAX_DOWNLOAD_STARTS` (3), a no-match only when *every* attempt is dead. This
+  start cost is paid ~once; later polls take the write-free resume path. Also:
+  while a download is in progress the resolver **suppresses the uncached
+  `addMagnet` probes** (the recurring per-poll burst that tripped RD's 429 and
+  could stall the very download) — cheap on-account reads still run, only the adds
+  are gated. `listActive`/`listCached` are optimizations, never gates: a provider
+  may omit them and a blip just costs the optimization.
   **Searches are cached (`indexers/cache.ts`).** JIT resolution means a 12-track
   album is 12 `/stream` requests, and `buildQueryString` is album-scoped, so all
   12 sent byte-identical queries. `withSearchCache` collapses them into one, with

@@ -150,6 +150,23 @@ export interface DebridProvider {
     signal?: AbortSignal,
     pickFiles?: (files: DebridFile[]) => string[],
   ): Promise<DownloadStatus>;
+
+  /**
+   * **Non-mutating** bulk scan: of these infohashes, which are already
+   * *downloading* (in progress, not yet complete) on the user's account?
+   * Returns infohash → {@link DownloadStatus} with live progress.
+   *
+   * This is the read-only companion to {@link startDownload}. While a download
+   * runs, the player re-resolves every few seconds; this lets the resolver report
+   * the ongoing download's progress from one list read — and, crucially, without
+   * re-adding a *different*, higher-ranked candidate that turned out dead, which a
+   * blind "start the best candidate again" would probe on every poll. Must not
+   * add, select, or delete anything. Optional — without it, the resolver falls
+   * back to (re)starting the best candidate each poll. `done`/cached torrents are
+   * out of scope here ({@link listCached} answers those); this reports only
+   * in-flight downloads.
+   */
+  listActive?(infoHashes: string[], apiKey: string, signal?: AbortSignal): Promise<Map<string, DownloadStatus>>;
 }
 
 /** Raised when a provider call fails in a way worth distinguishing (auth vs. transient). */

@@ -45,6 +45,7 @@ const providerOf = (over: Partial<DebridProvider> & { cache?: CacheResult; link?
   id: "realdebrid",
   // Optional on the port: only present when a test opts into the bulk pre-check.
   ...(over.listCached ? { listCached: over.listCached } : {}),
+  ...(over.listActive ? { listActive: over.listActive } : {}),
   ...(over.startDownload ? { startDownload: over.startDownload } : {}),
   checkCache: over.checkCache ?? (async () => over.cache ?? { cached: true, files: albumFiles }),
   resolveFile: over.resolveFile ?? (async () => over.link ?? { url: "https://rd.example/dl/digital-love.flac", filename: "03 - Digital Love.flac", sizeBytes: 50_000_000 }),
@@ -510,5 +511,82 @@ describe("resolveStreams — download uncached (resolving)", () => {
     });
     const result = await resolveStreams({ recordingId: RID }, config(), { ...seeded(10), provider });
     expect(result.outage).toBe(true);
+  });
+
+  // The indexer's seeder count is only a hint: the top-ranked torrent can be dead
+  // on the debrid side. A dead best candidate must not sink an album with others.
+  const dead = { ...candidate, infoHash: "a".repeat(40), title: "Daft Punk - Discovery [FLAC]", seeders: 9 };
+  const live = { ...candidate, infoHash: "b".repeat(40), title: "Daft Punk - Discovery [MP3]", seeders: 5 };
+  const twoCandidates = () => deps({ indexers: [indexerOf([dead, live])] });
+
+  it("falls back to the next candidate when the best is dead", async () => {
+    const started: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map(),
+      checkCache: async () => ({ cached: false }),
+      startDownload: async (ref) => {
+        started.push(ref.infoHash);
+        return ref.infoHash === dead.infoHash
+          ? { handle: "d", done: false, dead: true }
+          : { handle: "l", done: false, progress: 0.2 };
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...twoCandidates(), provider });
+    expect(result.resolving).toMatchObject({ progress: 0.2 });
+    // Tried the higher-seeded dead one first, then fell through to the live one.
+    expect(started).toEqual([dead.infoHash, live.infoHash]);
+  });
+
+  it("resumes an in-progress download via listActive without re-adding a dead sibling", async () => {
+    const started: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map(),
+      checkCache: async () => ({ cached: false }),
+      // A prior poll already established `live` as the download; the dead sibling
+      // must not be re-added just because it ranks higher.
+      listActive: async () => new Map([[live.infoHash.toLowerCase(), { handle: "l", done: false, progress: 0.6 }]]),
+      startDownload: async (ref) => {
+        started.push(ref.infoHash);
+        return { handle: "x", done: false, dead: true };
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...twoCandidates(), provider });
+    expect(result.resolving).toMatchObject({ progress: 0.6 });
+    expect(started).toEqual([]); // reported the active download; nothing added or probed
+  });
+
+  it("skips expensive uncached probes while a download is already in progress", async () => {
+    // The recurring addMagnet burst on every poll of a downloading track is what
+    // trips RD's 429; once listActive shows a download running, no uncached probe
+    // (a no-handle checkCache) should be spent.
+    const uncachedChecks: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map(),
+      listActive: async () => new Map([[live.infoHash.toLowerCase(), { handle: "l", done: false, progress: 0.5 }]]),
+      checkCache: async (ref) => {
+        if (!ref.handle) uncachedChecks.push(ref.infoHash);
+        return { cached: false };
+      },
+      startDownload: async () => ({ handle: "l", done: false, progress: 0.5 }),
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...twoCandidates(), provider });
+    expect(result.resolving).toMatchObject({ progress: 0.5 });
+    expect(uncachedChecks).toEqual([]); // no addMagnet burst while downloading
+  });
+
+  it("reports no-match only when every eligible candidate is dead", async () => {
+    const started: string[] = [];
+    const provider = providerOf({
+      listCached: async () => new Map(),
+      checkCache: async () => ({ cached: false }),
+      startDownload: async (ref) => {
+        started.push(ref.infoHash);
+        return { handle: "x", done: false, dead: true };
+      },
+    });
+    const result = await resolveStreams({ recordingId: RID }, config(), { ...twoCandidates(), provider });
+    expect(result.resolving).toBeUndefined();
+    expect(result.streams).toEqual([]);
+    expect(started).toEqual([dead.infoHash, live.infoHash]); // exhausted both before giving up
   });
 });

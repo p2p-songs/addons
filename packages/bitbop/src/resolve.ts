@@ -28,7 +28,7 @@ import type { Resolving, Stream, StreamRequest } from "@p2p-songs/addon-sdk";
 import type { BitbopConfig } from "./config.js";
 import type { MetadataLookup, TrackContext } from "./metadata.js";
 import type { Indexer, TorrentCandidate } from "./indexers/types.js";
-import type { DebridProvider, TorrentRef } from "./debrid/types.js";
+import type { DebridProvider, DownloadStatus, TorrentRef } from "./debrid/types.js";
 import { DebridError } from "./debrid/types.js";
 import { pickFile, type FileMatch } from "./pick-file.js";
 import { detectFormat } from "./format.js";
@@ -103,6 +103,19 @@ export async function resolveStreams(
   const pre = await listCachedQuietly(deps.provider, relevant, config, signal);
   if (pre.authFailed) return { streams: [], outage: true };
   const onAccount = pre.known;
+
+  // Is a download for this album already running (a re-poll of an uncached track
+  // this addon started earlier)? If so, we must not spend expensive `addMagnet`
+  // probes hunting a cached alternative on every poll: that recurring burst is
+  // exactly what trips Real-Debrid's 429, and a rate-limited account can stall the
+  // very download we're waiting on. Cheap on-account reads still run below (a
+  // cached copy is a better answer if one turns up); only the adds are suppressed,
+  // and the download itself is reported by `maybeStartDownload`.
+  const downloadInProgress =
+    config.downloadUncached && !!deps.provider.listActive
+      ? (await listActiveQuietly(deps.provider, relevant, config, signal)).size > 0
+      : false;
+
   // Probe the free ones first: they can satisfy the request before we spend a
   // single write, and a hit here means the expensive budget goes unused.
   const probe = [...relevant]
@@ -127,8 +140,9 @@ export async function resolveStreams(
       // under a burst, which prefetching several tracks at once easily triggers).
       // Only spend one when we have *nothing* yet: a cached/on-account stream
       // already in hand is enough, and if none is cached the download path takes
-      // over from the single best candidate.
-      if (streams.length > 0 || uncachedProbes >= MAX_UNCACHED_PROBES) continue;
+      // over from the single best candidate. And never spend one while a download
+      // for this album is already running — that recurring burst trips RD's 429.
+      if (streams.length > 0 || downloadInProgress || uncachedProbes >= MAX_UNCACHED_PROBES) continue;
       uncachedProbes++;
     }
     probed++;
@@ -169,11 +183,32 @@ export async function resolveStreams(
 }
 
 /**
- * Begin (or continue) downloading the best uncached-but-promising candidate on
- * the user's account and return a `resolving` result, or `undefined` when there's
- * nothing worth downloading (feature off, provider can't, or no candidate clears
- * the seeders floor). If the download has *just* completed, resolve it to a real
- * stream instead.
+ * How many candidates we'll *start* (pay an add for) in one resolve before giving
+ * up. A single dead top-seed must not sink an album that has ten other sources —
+ * but we can't burn an add + settle budget on every candidate either, so we try
+ * the best few. This cost is paid ~once: subsequent polls find the live download
+ * via {@link DebridProvider.listActive} and never re-enter the start loop.
+ */
+const MAX_DOWNLOAD_STARTS = 3;
+
+/**
+ * Begin (or continue) downloading a promising uncached candidate on the user's
+ * account and return a `resolving` result, or `undefined` when there's nothing
+ * worth downloading (feature off, provider can't, or no candidate clears the
+ * seeders floor). If a download has *just* completed, resolve it to a real stream
+ * instead.
+ *
+ * Two phases, because the indexer's seeder count is only a hint — the top-seeded
+ * torrent can still be dead on the debrid side:
+ *  1. **Resume:** if any eligible candidate is already downloading (a poll of a
+ *     download a previous resolve started), report *that one's* progress with no
+ *     writes. This is the steady state, and it deliberately does not touch a
+ *     higher-ranked candidate that a prior poll already found dead — otherwise we'd
+ *     re-add and re-probe that dead torrent on every single poll.
+ *  2. **Start with fallback:** nothing running yet, so start the best candidate;
+ *     if the provider reports it *dead*, fall back to the next, up to
+ *     {@link MAX_DOWNLOAD_STARTS}. Only when every attempt is dead do we report a
+ *     genuine no-match — a dead top-seed alone never does.
  */
 async function maybeStartDownload(
   relevant: TorrentCandidate[],
@@ -183,43 +218,79 @@ async function maybeStartDownload(
   signal?: AbortSignal,
 ): Promise<ResolveResult | undefined> {
   if (!config.downloadUncached || !provider.startDownload) return undefined;
-  const candidate = relevant.find((c) => (c.seeders ?? 0) >= config.downloadSeedersFloor);
-  if (!candidate) return undefined;
+  const eligible = relevant.filter((c) => (c.seeders ?? 0) >= config.downloadSeedersFloor);
+  if (eligible.length === 0) return undefined;
 
-  // Download the whole album (all audio), not just this track's file. On
-  // Real-Debrid a torrent is only "downloaded" — and its files only servable —
-  // once its *entire selected set* completes, so selecting a single file would
-  // make every *other* track of that album unplayable (the torrent reports done
-  // with just the one file present). Whole-album selection keeps album playback
-  // coherent and makes the rest of the album instant once it lands. `startDownload`
-  // still accepts a file picker for providers that can serve partial torrents.
-  try {
-    const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal);
-    if (process.env.BITBOP_DEBUG) {
-      console.error(
-        `[bitbop]   download ${status.done ? "DONE" : status.dead ? "dead" : `${Math.round((status.progress ?? 0) * 100)}%`}: ${candidate.title}`,
+  // Phase 1 — resume an already-running download without re-adding anything.
+  if (provider.listActive) {
+    try {
+      const active = await provider.listActive(
+        eligible.map((c) => c.infoHash),
+        config.debrid.apiKey,
+        signal,
       );
+      for (const candidate of eligible) {
+        const status = active.get(candidate.infoHash.toLowerCase());
+        if (!status) continue;
+        if (process.env.BITBOP_DEBUG) {
+          console.error(`[bitbop]   download ${Math.round((status.progress ?? 0) * 100)}% (active): ${candidate.title}`);
+        }
+        return downloadResult(status, candidate, track, config, provider, signal);
+      }
+    } catch (error) {
+      if (error instanceof DebridError && error.isAuth) return { streams: [], outage: true };
+      // A failed scan is not fatal — fall through and try starting the best.
     }
-    if (status.dead) return undefined; // unusable torrent, cleaned up — treat as no-match
-    if (status.done) {
-      // Completed between the cache probe and now: resolve it for real.
-      const stream = await resolveCandidate(candidate, track, config, provider, status.handle, signal);
-      return stream ? { streams: [stream], outage: false } : undefined;
-    }
-    return {
-      streams: [],
-      outage: false,
-      resolving: {
-        message: "Downloading",
-        retryAfter: DOWNLOAD_RETRY_SECONDS,
-        ...(status.progress !== undefined ? { progress: status.progress } : {}),
-      },
-    };
-  } catch (error) {
-    // A rejected key here is the same outage the cache probe would report.
-    if (error instanceof DebridError && error.isAuth) return { streams: [], outage: true };
-    return undefined; // transient — let the player retry as a plain no-match
   }
+
+  // Phase 2 — nothing running: start the best, falling back past dead torrents.
+  // Whole album (all audio), not this one file: on Real-Debrid a torrent's files
+  // are servable only once its *entire selected set* completes, so a single-file
+  // selection would make every *other* track of the album unplayable. Fetching the
+  // album keeps playback coherent and makes the rest instant once it lands.
+  let starts = 0;
+  for (const candidate of eligible) {
+    if (starts >= MAX_DOWNLOAD_STARTS) break;
+    starts++;
+    try {
+      const status = await provider.startDownload({ infoHash: candidate.infoHash }, config.debrid.apiKey, signal);
+      if (process.env.BITBOP_DEBUG) {
+        console.error(
+          `[bitbop]   download ${status.done ? "DONE" : status.dead ? "dead" : `${Math.round((status.progress ?? 0) * 100)}%`}: ${candidate.title}`,
+        );
+      }
+      if (status.dead) continue; // unusable torrent, cleaned up — try the next candidate
+      return downloadResult(status, candidate, track, config, provider, signal);
+    } catch (error) {
+      if (error instanceof DebridError && error.isAuth) return { streams: [], outage: true };
+      // Transient failure on this candidate — try the next.
+    }
+  }
+  return undefined; // every attempt was dead/failed → a genuine no-match
+}
+
+/** Turn a download's status into a resolve result: a real stream when done, else a `resolving` marker. */
+async function downloadResult(
+  status: DownloadStatus,
+  candidate: TorrentCandidate,
+  track: TrackContext,
+  config: BitbopConfig,
+  provider: DebridProvider,
+  signal?: AbortSignal,
+): Promise<ResolveResult | undefined> {
+  if (status.done) {
+    const stream = await resolveCandidate(candidate, track, config, provider, status.handle, signal);
+    return stream ? { streams: [stream], outage: false } : undefined;
+  }
+  return {
+    streams: [],
+    outage: false,
+    resolving: {
+      message: "Downloading",
+      retryAfter: DOWNLOAD_RETRY_SECONDS,
+      ...(status.progress !== undefined ? { progress: status.progress } : {}),
+    },
+  };
 }
 
 // --- discovery ---
@@ -304,6 +375,30 @@ async function listCachedQuietly(
     // a rate limit, a blip — just costs us the optimization.
     if (error instanceof DebridError && error.isAuth) return { known: new Map(), authFailed: true };
     return { known: new Map(), authFailed: false };
+  }
+}
+
+/**
+ * Read-only scan for candidates already downloading on the account. Like the
+ * cached pre-check, this is an optimization: a provider may not implement it, and
+ * a blip must not turn a resolvable request into an outage — an empty map just
+ * means "assume no download is running" and the normal probe path proceeds.
+ */
+async function listActiveQuietly(
+  provider: DebridProvider,
+  candidates: TorrentCandidate[],
+  config: BitbopConfig,
+  signal?: AbortSignal,
+): Promise<Map<string, DownloadStatus>> {
+  if (!provider.listActive || candidates.length === 0) return new Map();
+  try {
+    return await provider.listActive(
+      candidates.map((c) => c.infoHash),
+      config.debrid.apiKey,
+      signal,
+    );
+  } catch {
+    return new Map();
   }
 }
 

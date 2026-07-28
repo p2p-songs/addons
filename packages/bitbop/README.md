@@ -126,12 +126,28 @@ It downloads the **whole
 album** (all audio), not a single file: on Real-Debrid a torrent's files are only
 servable once its entire selected set completes, so selecting one file would make
 every *other* track of that album unplayable — and fetching the album makes the
-rest instant once it lands. Guardrails: a seeders floor (`downloadSeedersFloor`,
-default 1) so a near-dead torrent isn't parked half-done; an in-progress download
-is found by hash rather than re-added, so a poll costs no churn; once a cached
-stream is in hand Bitbop stops spending `addMagnet` on the other candidates (that
-burst was tripping RD's 429 rate limit); and the player caps the total wait, then
-fails. Set `downloadUncached: false` to keep the account strictly cached-only.
+rest instant once it lands.
+
+**A dead top-seed doesn't sink the album.** The indexer's seeder count is only a
+hint — the best-ranked torrent can still be dead on the debrid side (stuck at 0%,
+then an error status). So the download picks in two phases. **Resume:** a
+read-only `listActive` scan asks "is one of these candidates already downloading?"
+and, if so, reports *that* one's progress with no writes — the steady state of a
+poll costs zero `addMagnet`. **Start with fallback:** when nothing is running yet,
+Bitbop starts the best candidate, and if the provider reports it *dead*, falls
+through to the next (up to a small cap) rather than returning a no-match. Only when
+every attempt is dead is it a genuine no-match. This is what fixed "some tracks say
+*no source* and others stick at *Downloading… 0%* forever": both were the single
+chosen torrent being dead with nothing to fall back to.
+
+Guardrails: a seeders floor (`downloadSeedersFloor`, default 1) so a near-dead
+torrent isn't parked half-done; an in-progress download is found by hash rather
+than re-added, so a poll costs no churn, and `listActive` means a poll never
+re-adds a *dead sibling* that merely ranks higher; once a cached stream is in hand
+Bitbop stops spending `addMagnet` on the other candidates, and while a download is
+already running it suppresses the uncached probes entirely (both bursts were
+tripping RD's 429 rate limit); and the player caps the total wait, then fails. Set
+`downloadUncached: false` to keep the account strictly cached-only.
 
 ## Why checking the cache is not a read
 

@@ -106,6 +106,8 @@ interface RdListItem {
   id?: string;
   hash?: string;
   status?: string;
+  /** RD's download progress, 0–100, present on the list endpoint too. */
+  progress?: number;
 }
 
 export interface RealDebridOptions {
@@ -158,6 +160,38 @@ export class RealDebridProvider implements DebridProvider {
         if (item.status !== STATUS_DOWNLOADED || !item.hash || !item.id) continue;
         const hash = item.hash.toLowerCase();
         if (wanted.has(hash) && !found.has(hash)) found.set(hash, item.id);
+      }
+      if (found.size === wanted.size || items.length < LIST_PAGE_SIZE) break;
+    }
+    return found;
+  }
+
+  /**
+   * Read-only scan for hashes that are **downloading right now** on the account,
+   * with live progress. Same bounded newest-first scan as {@link listCached}, but
+   * matching in-progress statuses instead of `downloaded`. Lets the resolver poll
+   * an ongoing download without adding anything, and without re-touching a dead
+   * higher-ranked sibling.
+   */
+  async listActive(infoHashes: string[], apiKey: string, signal?: AbortSignal): Promise<Map<string, DownloadStatus>> {
+    const wanted = new Set(infoHashes.map((h) => h.toLowerCase()));
+    const found = new Map<string, DownloadStatus>();
+    if (wanted.size === 0) return found;
+
+    for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+      const items = await this.get<RdListItem[] | undefined>(
+        `/torrents?page=${page}&limit=${LIST_PAGE_SIZE}`,
+        apiKey,
+        signal,
+      );
+      if (!Array.isArray(items) || items.length === 0) break;
+
+      for (const item of items) {
+        if (!item.hash || !item.id || !item.status || !STATUS_IN_PROGRESS.has(item.status)) continue;
+        const hash = item.hash.toLowerCase();
+        if (!wanted.has(hash) || found.has(hash)) continue;
+        const progress = typeof item.progress === "number" ? Math.max(0, Math.min(1, item.progress / 100)) : undefined;
+        found.set(hash, { handle: item.id, done: false, ...(progress !== undefined ? { progress } : {}) });
       }
       if (found.size === wanted.size || items.length < LIST_PAGE_SIZE) break;
     }

@@ -288,6 +288,29 @@ describe("RealDebridProvider.listCached", () => {
   });
 });
 
+describe("RealDebridProvider.listActive", () => {
+  it("reports in-progress downloads with live progress, and nothing else, mutating nothing", async () => {
+    const fake = fakeRd({
+      accountList: [
+        { id: "A", hash: HASH, status: "downloading", progress: 42 },
+        { id: "B", hash: "b".repeat(40), status: "downloaded", progress: 100 },
+        { id: "C", hash: "c".repeat(40), status: "queued", progress: 0 },
+        { id: "D", hash: "d".repeat(40), status: "magnet_error", progress: 0 },
+      ],
+    });
+    const active = await providerOf(fake).listActive(
+      [HASH, "b".repeat(40), "c".repeat(40), "d".repeat(40)],
+      "RDKEY",
+    );
+
+    expect(active.get(HASH)).toMatchObject({ handle: "A", done: false, progress: 0.42 });
+    expect(active.get("c".repeat(40))).toMatchObject({ handle: "C", done: false, progress: 0 });
+    expect(active.has("b".repeat(40))).toBe(false); // downloaded is listCached's job, not active
+    expect(active.has("d".repeat(40))).toBe(false); // a dead/errored torrent is not "active"
+    expect(fake.calls.every((c) => c.method === "GET")).toBe(true);
+  });
+});
+
 describe("RealDebridProvider.resolveFile", () => {
   it("unrestricts the link that matches the chosen file id", async () => {
     const fake = fakeRd();
