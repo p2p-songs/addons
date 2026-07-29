@@ -30,8 +30,13 @@ the Railway CLI or dashboard, and your hosted **musicmeta** manifest URL.
 
 ## 1. Prowlarr (public, API-key gated, with a volume)
 
-1. **New Service → Docker Image →** `lscr.io/linuxserver/prowlarr:latest`.
+1. **New Service → Docker Image →** `linuxserver/prowlarr:latest` (the Docker Hub
+   image, [`hub.docker.com/r/linuxserver/prowlarr`](https://hub.docker.com/r/linuxserver/prowlarr);
+   `lscr.io/linuxserver/prowlarr` is LinuxServer's own registry alias for the
+   exact same image — either works, use whichever Railway accepts cleanly).
 2. Attach a **volume** mounted at `/config` (its DB + indexer config live here).
+   Prowlarr listens on **9696** — Railway detects it; if not, set the service's
+   target port to `9696`.
 3. Generate a **public domain** for it.
 4. Open the domain, complete first-boot **authentication setup** (set a username/
    password — Prowlarr forces auth; that plus the API key is what makes a public
