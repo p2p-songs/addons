@@ -6,15 +6,18 @@ friend can try the whole thing with nothing running on your laptop. Assumes the
 — see [`README.md`](./README.md)); you only need its public **musicmeta** URL here.
 
 This is the **shared-setup / Shape-A** model (`.github/docs/DEPLOYMENT.md`): one
-Bitbop install URL that you generate and hand out. Everyone you share it with
-plays through **your** Real-Debrid account and **your** Prowlarr. That URL is a
-secret — it carries both keys. (Want friends to bring their *own* debrid key with
-Prowlarr kept private? That's the unbuilt "Shape B"; say so and it's a follow-up.)
+Bitbop install URL that you generate and **bake into PHONO** (or hand out).
+Everyone who uses that PHONO plays through **your** Real-Debrid account and
+**your** Prowlarr. That URL is a secret — it carries both keys, and baking it in
+means anyone who can load the PHONO instance can extract it, so keep the instance
+to an audience you'd trust with the URL. (Want friends to bring their *own*
+debrid key with Prowlarr kept private? That's the unbuilt "Shape B"; say so and
+it's a follow-up.)
 
 ```
  friend ─▶ PHONO (public) ─▶ musicmeta (public, already up) ─▶ Meilisearch (private)
                 │
-                └─ pastes your Bitbop URL ─▶ Bitbop (public, public-safe)
+                └─ Bitbop pre-installed (baked URL) ─▶ Bitbop (public, public-safe)
                                                    └─ Torznab ─▶ Prowlarr (public, API-key gated)
 ```
 
@@ -70,23 +73,10 @@ docker push ghcr.io/<you>/bitbop:latest
 - **Health check** `/manifest.json` (see `railway/bitbop.railway.json`).
 - Generate a **public domain**.
 
-## 3. PHONO player (public static)
+## 3. Generate the Bitbop install URL
 
-```sh
-# from the p2p-songs parent dir (contains addon-sdk/, addons/, player/)
-docker build -f player/deploy/Dockerfile \
-  --build-arg VITE_DEFAULT_METADATA_ADDON_URL=https://<your-musicmeta>/manifest.json \
-  -t ghcr.io/<you>/phono:latest .
-docker push ghcr.io/<you>/phono:latest
-```
-
-- **New Service → Deploy from Docker Image →** `ghcr.io/<you>/phono:latest`.
-- Caddy serves the static build on Railway's `$PORT`; generate a **public
-  domain**. The hosted musicmeta is baked in as the default metadata addon, so
-  search works the moment the friend opens the page. No stream addon is bundled
-  (neutrality §11) — that's the Bitbop URL below.
-
-## 4. Generate the shared Bitbop install URL
+Do this **before** building PHONO — the URL gets baked into the player so your
+friend doesn't have to paste anything.
 
 ```sh
 RD_KEY=<your-real-debrid-key> \
@@ -97,17 +87,46 @@ node addons/deploy/bitbop/gen-install-url.mjs
 ```
 
 It reads the indexer list from Prowlarr and prints
-`https://<bitbop-domain>/<config>/manifest.json`. **This is the secret you share.**
+`https://<bitbop-domain>/<config>/manifest.json`. **This URL is a secret** — it
+carries your Real-Debrid key and Prowlarr key.
+
+## 4. PHONO player (public static), with Bitbop pre-installed
+
+```sh
+# from the p2p-songs parent dir (contains addon-sdk/, addons/, player/)
+docker build -f player/deploy/Dockerfile \
+  --build-arg VITE_DEFAULT_METADATA_ADDON_URL=https://<your-musicmeta>/manifest.json \
+  --build-arg VITE_DEFAULT_STREAM_ADDON_URL='https://<bitbop-domain>/<config>/manifest.json' \
+  -t ghcr.io/<you>/phono:latest .
+docker push ghcr.io/<you>/phono:latest
+```
+
+- **New Service → Deploy from Docker Image →** `ghcr.io/<you>/phono:latest`.
+- Caddy serves the static build on Railway's `$PORT`; generate a **public
+  domain**. Both defaults are baked in: musicmeta (metadata) and Bitbop (stream),
+  each seeded once through the ordinary install path — so the friend opens the
+  page and search *and* playback just work, nothing to paste.
+- **`VITE_DEFAULT_STREAM_ADDON_URL` is a self-host override and is
+  credential-bearing** (§11): it is inlined into the JS bundle, so anyone who can
+  load this PHONO instance can extract the Bitbop URL — i.e. your Real-Debrid
+  key. Only bake it into an instance whose audience you'd hand the install URL to
+  anyway (a friend, not the public internet). Omit the arg for the neutral,
+  publicly-shareable build; then the friend installs Bitbop by pasting the URL
+  (§5 fallback).
 
 ## 5. Your friend
 
-1. Open the **PHONO** domain (search already works — musicmeta is pre-installed).
-2. **Addons → paste the Bitbop URL → install.**
-3. Play something. Well-seeded albums resolve fast; thin ones fail quickly and
-   honestly (the stall-detection).
+Open the **PHONO** domain — search and playback are already wired up. Play
+something; well-seeded albums resolve fast, thin ones fail quickly and honestly
+(the stall-detection).
+
+*(Fallback, if you built PHONO **without** the stream build-arg: **Addons →
+paste the Bitbop URL → install**, then play.)*
 
 ## Redeploys
 
 Rebuild + push the image and Railway redeploys. Prowlarr's data persists on its
-volume. If you rotate the Real-Debrid key or change indexers, just re-run step 4
-and re-share the new URL (the old one keeps working until the key is revoked).
+volume. If you rotate the Real-Debrid key or change indexers, re-run step 3 for a
+new URL and rebuild PHONO (step 4) with it (the old URL keeps working until the
+key is revoked). A user's manual removal of a seeded default sticks, so if your
+friend ever removes Bitbop it won't be forced back by a redeploy.
