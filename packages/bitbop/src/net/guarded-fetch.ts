@@ -174,10 +174,23 @@ function guardedLookup(allowPrivate: boolean) {
   return (
     hostname: string,
     lookupOptions: unknown,
-    callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
+    // Node calls back in two shapes depending on the caller's `all`: a single
+    // `(err, address, family)` or, when `all` is set, `(err, addresses[])`.
+    callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void,
   ): void => {
-    const base = typeof lookupOptions === "object" && lookupOptions !== null ? lookupOptions : {};
-    dnsLookup(hostname, { ...(base as object), all: true }, (err, addresses: LookupAddress[]) => {
+    const base = (typeof lookupOptions === "object" && lookupOptions !== null ? lookupOptions : {}) as {
+      all?: boolean;
+    };
+    // We always resolve with `all: true` so we can validate *every* returned
+    // record (a mixed answer is how DNS rebinding is staged). But we must call
+    // back in the shape the caller asked for: Node ≥20 defaults
+    // `autoSelectFamily: true`, so its HTTP agent requests `all: true` and then
+    // reads `addresses[0].address` — hand it a single string there and it throws
+    // `Invalid IP address: undefined`, which silently broke every DNS-named
+    // (i.e. every real public) indexer host. Literal IPs and loopback skip DNS,
+    // which is why tests and local runs never hit this.
+    const wantAll = base.all === true;
+    dnsLookup(hostname, { ...base, all: true }, (err, addresses: LookupAddress[]) => {
       if (err) return callback(err, "", 0);
       const list = Array.isArray(addresses) ? addresses : [addresses];
       if (list.length === 0) return callback(new BlockedDestinationError("no address"), "", 0);
@@ -191,6 +204,7 @@ function guardedLookup(allowPrivate: boolean) {
           }
         }
       }
+      if (wantAll) return callback(null, list);
       const first = list[0]!;
       callback(null, first.address, first.family);
     });

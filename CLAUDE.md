@@ -221,7 +221,22 @@ discovery→stream loop is complete and verified end-to-end (musicmeta album met
   address has many spellings and an attacker picks the spelling: `::ffff:7f00:1`,
   `0:0:0:0:0:ffff:7f00:1` and `::ffff:127.0.0.1` are all loopback, and the last
   is the one form `new URL()` never yields — it rewrites the dotted quad to hex,
-  so v2's prefix regex matched only the unreachable case. Public-safe
+  so v2's prefix regex matched only the unreachable case.
+  **The `lookup` hook must honor the caller's `all` option (2026-07-28).** Node
+  ≥20 defaults `autoSelectFamily: true`, so `http(s).request`'s agent calls the
+  custom `lookup` with `all: true` and expects an **array** of `{address, family}`
+  back; `guardedLookup` always returned a single `(address, family)`, so Node read
+  `addresses[0].address` off a string → `TypeError: Invalid IP address: undefined`
+  and **every DNS-named destination threw** — i.e. public-safe mode never actually
+  worked against a real hostname (a hosted Prowlarr). It went unseen because
+  literal IPs and loopback listeners skip DNS entirely, so A-011's tests and every
+  local `127.0.0.1` run bypassed the hook's success path; it only surfaced once
+  bitbop was hosted and pointed at a `*.up.railway.app` Prowlarr (500 "stream
+  handler failed" → player "stream addons couldn't be reached"). Fix: resolve with
+  `all: true` internally (still validate *every* record), but call back in the
+  shape the caller asked for — array when `options.all`, else the single form; a
+  regression test connects through a real hostname (`localhost`), the one path a
+  literal-IP test can't cover. Public-safe
   is the **default**; a loopback/LAN indexer needs
   `BITBOP_ALLOW_PRIVATE_INDEXERS=1`. Also: a total debrid outage is an outage
   (retryable 500), not a cached no-match; and no config field may name a mode the

@@ -107,6 +107,40 @@ describe("guarded fetch — self-host mode", () => {
   });
 });
 
+// Every test above uses a literal IP, which skips DNS entirely — so none of them
+// exercised the `lookup` hook's success path. Node >=20 defaults
+// `autoSelectFamily: true`, so its HTTP agent calls a custom `lookup` with
+// `all: true` and expects an *array* back; returning a single `(address, family)`
+// made Node read `addresses[0].address` off a string → `Invalid IP address:
+// undefined`, which failed *every DNS-named indexer* (a hosted Prowlarr) while
+// literal-IP local setups worked. This connects through a real hostname to prove
+// the hook returns the right shape.
+describe("guarded fetch — DNS hostname (autoSelectFamily all-addresses path)", () => {
+  let dnsServer: Server;
+  let dnsPort: number;
+  beforeAll(async () => {
+    dnsServer = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/xml" });
+      res.end("<rss><channel></channel></rss>");
+    });
+    // Bind all interfaces so `localhost` reaches it whether it resolves to
+    // 127.0.0.1 or ::1.
+    await new Promise<void>((resolve) => dnsServer.listen(0, resolve));
+    const addr = dnsServer.address();
+    dnsPort = typeof addr === "object" && addr ? addr.port : 0;
+  });
+  afterAll(async () => {
+    await new Promise<void>((resolve, reject) => dnsServer.close((e) => (e ? reject(e) : resolve())));
+  });
+
+  it("resolves a hostname (not a literal IP) instead of throwing Invalid IP address", async () => {
+    const guarded = createGuardedFetch({ allowPrivate: true }); // localhost is loopback
+    const res = await guarded(`http://localhost:${dnsPort}/torznab`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("<rss>");
+  });
+});
+
 describe("guarded fetch — redirects are policed per hop", () => {
   it("refuses a redirect that lands on a private address in public mode", async () => {
     // Serve the redirect from the loopback server but *in self-host mode* to get
